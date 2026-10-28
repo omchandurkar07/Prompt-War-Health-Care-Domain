@@ -9,8 +9,6 @@ import {
   Typography,
   TextField,
   Button,
-  ToggleButtonGroup,
-  ToggleButton,
   Modal,
   Link,
   Alert,
@@ -152,6 +150,8 @@ const Login = () => {
     }
   };
 
+  const userTypeIndex = ['patient', 'doctor', 'admin'].indexOf(userType);
+
   return (
     <>
       <Box
@@ -211,99 +211,79 @@ const Login = () => {
           Sign in to access your secure portal
         </Typography>
 
-        <ToggleButtonGroup
-          value={userType}
-          exclusive
-          onChange={(e, newType) => newType && setUserType(newType)}
-          aria-label="user type"
-          fullWidth
+        <Box
+          role="group"
+          aria-label="Choose account type"
           sx={{
+            position: 'relative',
+            display: 'flex',
+            width: '100%',
             mb: 3.5,
-            background: '#f1f5f9',
             p: '4px',
             borderRadius: '12px',
-            border: 'none',
-            '& .MuiToggleButtonGroup-grouped': {
-              border: 0,
-              '&.Mui-disabled': {
-                border: 0,
-              },
-              '&:not(:first-of-type)': {
-                borderRadius: '8px',
-              },
-              '&:first-of-type': {
-                borderRadius: '8px',
-              },
-            },
+            background: '#e9e9eb',
           }}
         >
-          <ToggleButton 
-            value="patient" 
-            aria-label="patient portal"
+          <Box
+            aria-hidden="true"
             sx={{
-              py: 1,
-              fontWeight: 700,
-              fontSize: '0.85rem',
-              color: '#64748b',
-              textTransform: 'none',
-              transition: 'all 0.2s',
-              '&.Mui-selected': {
-                background: '#ffffff',
-                color: '#2563eb',
-                boxShadow: '0 4px 12px rgba(15, 23, 42, 0.05)',
-                '&:hover': {
-                  background: '#ffffff',
-                }
-              }
+              position: 'absolute',
+              zIndex: 0,
+              top: '4px',
+              bottom: '4px',
+              left: '4px',
+              width: 'calc((100% - 8px) / 3)',
+              borderRadius: '9px',
+              background: '#ffffff',
+              boxShadow: '0 2px 6px rgba(15, 23, 42, 0.18)',
+              transform: `translateX(${userTypeIndex * 100}%)`,
+              transition: 'transform 280ms cubic-bezier(0.22, 1, 0.36, 1)',
+              '@media (prefers-reduced-motion: reduce)': {
+                transition: 'none',
+              },
             }}
-          >
-            Patient Portal
-          </ToggleButton>
-          <ToggleButton 
-            value="doctor" 
-            aria-label="doctor console"
-            sx={{
-              py: 1,
-              fontWeight: 700,
-              fontSize: '0.85rem',
-              color: '#64748b',
-              textTransform: 'none',
-              transition: 'all 0.2s',
-              '&.Mui-selected': {
-                background: '#ffffff',
-                color: '#2563eb',
-                boxShadow: '0 4px 12px rgba(15, 23, 42, 0.05)',
-                '&:hover': {
-                  background: '#ffffff',
-                }
-              }
-            }}
-          >
-            Doctor Console
-          </ToggleButton>
-          <ToggleButton 
-            value="admin" 
-            aria-label="admin panel"
-            sx={{
-              py: 1,
-              fontWeight: 700,
-              fontSize: '0.85rem',
-              color: '#64748b',
-              textTransform: 'none',
-              transition: 'all 0.2s',
-              '&.Mui-selected': {
-                background: '#ffffff',
-                color: '#2563eb',
-                boxShadow: '0 4px 12px rgba(15, 23, 42, 0.05)',
-                '&:hover': {
-                  background: '#ffffff',
-                }
-              }
-            }}
-          >
-            Admin Panel
-          </ToggleButton>
-        </ToggleButtonGroup>
+          />
+          {[
+            { value: 'patient', label: 'Patient Portal' },
+            { value: 'doctor', label: 'Doctor Console' },
+            { value: 'admin', label: 'Admin Panel' },
+          ].map(({ value, label }) => (
+            <Box
+              key={value}
+              component="button"
+              type="button"
+              aria-pressed={userType === value}
+              onClick={() => setUserType(value)}
+              sx={{
+                position: 'relative',
+                zIndex: 1,
+                flex: 1,
+                minWidth: 0,
+                py: 1,
+                px: 0.5,
+                border: 0,
+                borderRadius: '9px',
+                background: 'transparent',
+                color: userType === value ? '#2563eb' : '#64748b',
+                fontFamily: 'inherit',
+                fontSize: { xs: '0.72rem', sm: '0.85rem' },
+                fontWeight: 700,
+                whiteSpace: 'nowrap',
+                cursor: 'pointer',
+                transition: 'color 180ms ease',
+                '&:focus-visible': {
+                  outline: '2px solid #2563eb',
+                  outlineOffset: '-2px',
+                },
+                '@media (prefers-reduced-motion: reduce)': {
+                  transition: 'none',
+                },
+              }}
+            >
+              {label}
+            </Box>
+          ))}
+        </Box>
         
         {error && (
           <Alert 
