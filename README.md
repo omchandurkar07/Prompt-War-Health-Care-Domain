@@ -62,6 +62,12 @@ Prerequisites: a supported Node.js/npm installation, MongoDB, and (for ML featur
 
 To enable the optional ML helper, install `requirements.txt` in a Python virtual environment. For payment setup and webhook configuration, see [PAYMENTS_SETUP.md](PAYMENTS_SETUP.md).
 
+### Render deployment
+
+The repository includes a Render Blueprint in `render.yaml`. It installs the backend and client dependencies, builds the Vite frontend into `client/dist`, and starts the Express server. If this service is configured in the Render dashboard rather than synced from the Blueprint, set **Build Command** to `npm ci && npm ci --prefix client && npm run build --prefix client` and **Start Command** to `npm start`, then deploy the latest commit. Keep application secrets such as `MONGO_URI` configured as Render environment variables; never commit them.
+
+The Python/Flask ML helper is optional. Its absence does not prevent the main web app from starting, but symptom-checker routes that depend on it will be unavailable.
+
 ### Phase 2 testing
 
 - Build the frontend with `npm run build --prefix client` and lint it with `npm run lint --prefix client`.
