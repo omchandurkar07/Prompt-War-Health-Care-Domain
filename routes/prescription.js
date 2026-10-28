@@ -45,6 +45,34 @@ const getPrescriptionQuery = (rx_id, extraQuery = {}) => {
   }
 };
 
+const getPrescriptionDetails = async (rx, isDoctor) => {
+  const reminders = await MedicineReminder.find({ prescription_db_id: rx._id, is_active: true });
+  const rxData = {
+    ...rx.toObject(),
+    id: rx._id,
+    dname: rx.doctor_id?.full_name || 'Doctor',
+    specialization: rx.doctor_id?.specialization || '',
+    pname: rx.patient_id?.full_name || 'Patient',
+    pemail: rx.patient_id?.email || '',
+    recovery_plan: Object.keys(rx.recovery_plan || {}).length
+      ? rx.recovery_plan
+      : createFallbackRecoveryPlan(
+        rx.medicines,
+        rx.diagnosis || rx.diagnosis_notes,
+        rx.doctor_notes || rx.advice,
+        rx.follow_up_date
+      )
+  };
+
+  return {
+    ok: true,
+    rx: rxData,
+    medicines: rx.medicines,
+    reminders,
+    is_doctor_view: isDoctor
+  };
+};
+
 const toArray = (val) => {
   if (!val) return [];
   return Array.isArray(val) ? val : [val];
@@ -132,6 +160,7 @@ router.get(['/doctor/prescription/:aid', '/doctor/prescription/create/:aid'], do
       pname: appt.patient_id.full_name,
       pemail: appt.patient_id.email,
       pdob: appt.patient_id.dob,
+      preferred_language: appt.patient_id.preferred_language || 'English',
       fm_name: appt.family_member_id ? appt.family_member_id.name : null,
       fm_dob: appt.family_member_id ? appt.family_member_id.dob : null,
       status: appt.status
@@ -171,7 +200,10 @@ router.post(['/doctor/prescription/:aid', '/doctor/prescription/create/:aid'], d
     let followUp = f.follow_up_date || null;
     let medicines = parseMedicinesFromForm(f);
     const doctorReviewedMedicines = medicines;
-    const preferredLanguage = f.preferred_language || 'English';
+    const preferredLanguage = f.preferred_language || appt.patient_id?.preferred_language || 'English';
+    if (!['English', 'Hindi', 'Marathi'].includes(preferredLanguage)) {
+      return res.status(400).json({ ok: false, error: 'Choose a supported prescription summary language.' });
+    }
 
     const hasFile = req.file;
 
@@ -426,40 +458,14 @@ router.get('/prescriptions/:rx_id/', async (req, res) => {
       return res.status(404).json({ ok: false, error: 'Prescription not found.' });
     }
 
-    const isDoctor = req.session.doctor_id && String(req.session.doctor_id) === String(rx.doctor_id._id);
-    const isPatient = req.session.patient_id && String(req.session.patient_id) === String(rx.patient_id._id);
+    const isDoctor = req.session.doctor_id && String(req.session.doctor_id) === String(rx.doctor_id?._id || rx.doctor_id);
+    const isPatient = req.session.patient_id && String(req.session.patient_id) === String(rx.patient_id?._id || rx.patient_id);
 
     if (!isDoctor && !isPatient) {
       return res.status(403).json({ ok: false, error: 'Access denied.' });
     }
 
-    const reminders = await MedicineReminder.find({ prescription_db_id: rx._id, is_active: true });
-
-    // Map properties for frontend compatibility
-    const rxData = {
-      ...rx.toObject(),
-      id: rx._id,
-      dname: rx.doctor_id.full_name,
-      specialization: rx.doctor_id.specialization,
-      pname: rx.patient_id.full_name,
-      pemail: rx.patient_id.email,
-      recovery_plan: Object.keys(rx.recovery_plan || {}).length
-        ? rx.recovery_plan
-        : createFallbackRecoveryPlan(
-          rx.medicines,
-          rx.diagnosis || rx.diagnosis_notes,
-          rx.doctor_notes || rx.advice,
-          rx.follow_up_date
-        )
-    };
-
-    res.json({
-      ok: true,
-      rx: rxData,
-      medicines: rx.medicines,
-      reminders,
-      is_doctor_view: isDoctor
-    });
+    res.json(await getPrescriptionDetails(rx, Boolean(isDoctor)));
   } catch (error) {
     console.error(error);
     res.status(500).json({ ok: false, error: 'Error loading prescription details.' });
@@ -474,6 +480,9 @@ router.post('/doctor/prescription/regenerate/:rx_id', doctorRequired, async (req
   const { rx_id } = req.params;
   const did = req.session.doctor_id;
   const preferredLanguage = req.body.preferred_language || 'English';
+  if (!['English', 'Hindi', 'Marathi'].includes(preferredLanguage)) {
+    return res.status(400).json({ ok: false, error: 'Choose a supported prescription summary language.' });
+  }
 
   try {
     const rxQuery = getPrescriptionQuery(rx_id, { doctor_id: did });
@@ -583,6 +592,25 @@ router.get('/patient/prescriptions', patientRequired, async (req, res) => {
   } catch (error) {
     console.error('[Patient prescriptions] Failed to load history:', error);
     res.status(500).json({ ok: false, error: 'Unable to load prescription history.' });
+  }
+});
+
+router.get('/patient/prescriptions/:rx_id/details', patientRequired, async (req, res) => {
+  try {
+    const rxQuery = getPrescriptionQuery(req.params.rx_id, { patient_id: req.session.patient_id });
+    if (!rxQuery) {
+      return res.status(400).json({ ok: false, error: 'Invalid prescription ID format.' });
+    }
+
+    const rx = await rxQuery.populate('doctor_id', 'full_name specialization').populate('patient_id', 'full_name email');
+    if (!rx) {
+      return res.status(404).json({ ok: false, error: 'This prescription is not available in your patient account.' });
+    }
+
+    res.json(await getPrescriptionDetails(rx, false));
+  } catch (error) {
+    console.error('[Patient prescription details] Failed to load:', error);
+    res.status(500).json({ ok: false, error: 'Unable to load prescription details.' });
   }
 });
 
@@ -716,7 +744,7 @@ router.post('/prescription/ocr', doctorRequired, tempUpload.single('file'), asyn
       follow_up_date: aiRes.follow_up_date,
       explanation: aiRes.explanation,
       recovery_plan: aiRes.recovery_plan,
-      raw_text: aiRes.raw_text || aiRes.raw_response,
+      raw_text: aiRes.raw_text || '',
       extraction_status: aiRes.status
     });
   } catch (error) {

@@ -23,6 +23,7 @@ const WritePrescription = () => {
   const [showOcrPreview, setShowOcrPreview] = useState(false);
   const [ocrLoading, setOcrLoading] = useState(false);
   const [extractionNotice, setExtractionNotice] = useState('');
+  const [scanReviewConfirmed, setScanReviewConfirmed] = useState(false);
   
   // Medicines List
   const [medicines, setMedicines] = useState([]);
@@ -51,6 +52,8 @@ const WritePrescription = () => {
           setDoctorNotes(res.data.existing_rx.doctor_notes || res.data.existing_rx.advice || '');
           setFollowUpDate(res.data.existing_rx.follow_up_date || '');
           setPreferredLanguage(res.data.existing_rx.ai_language || 'English');
+        } else {
+          setPreferredLanguage(res.data.appt?.preferred_language || 'English');
         }
         if (res.data.medicines && res.data.medicines.length > 0) {
           setMedicines(res.data.medicines);
@@ -115,6 +118,8 @@ const WritePrescription = () => {
 
     setFileError('');
     setSelectedFile(file);
+    setScanReviewConfirmed(false);
+    setMedicines(current => current.filter(medicine => medicine.source !== 'scan'));
     setShowOcrPreview(false);
     setOcrText('');
     setExtractionNotice('Prescription scan uploaded. Extracting medicine details...');
@@ -136,6 +141,7 @@ const WritePrescription = () => {
     if (!fileToScan) {
       return;
     }
+    setScanReviewConfirmed(false);
     setOcrLoading(true);
     const formData = new FormData();
     formData.append('file', fileToScan);
@@ -161,11 +167,16 @@ const WritePrescription = () => {
             quantity: m.quantity || '',
             quantity_source: m.quantity_source || (m.quantity ? 'written' : 'not_specified'),
             confidence: m.confidence || 'low',
+            source: 'scan',
             route: m.route || '',
             instructions: m.instructions || ''
           })));
-        setExtractionNotice('Detected details are suggestions. Verify the medicine, dose, schedule, duration, and quantity against the uploaded prescription before saving.');
+        const lowConfidenceCount = result.medicines.filter(medicine => medicine.confidence === 'low').length;
+        setExtractionNotice(
+          `Detected ${result.medicines.length} medicine(s). Model confidence is only an estimate${lowConfidenceCount ? `; ${lowConfidenceCount} need extra attention` : ''}. Verify every field against the original scan before saving.`
+        );
       } else {
+        setMedicines(current => current.filter(medicine => medicine.source !== 'scan'));
         setExtractionNotice('The scan could not reliably identify any medicines. Check the original scan or upload a clearer image before saving.');
       }
       if (result.diagnosis) {
@@ -183,6 +194,7 @@ const WritePrescription = () => {
       }
     } catch (err) {
       console.error(err);
+      setMedicines(current => current.filter(medicine => medicine.source !== 'scan'));
       setExtractionNotice(err.message || 'Unable to analyze this scan. Try uploading a clearer prescription image.');
     } finally {
       setOcrLoading(false);
@@ -193,6 +205,10 @@ const WritePrescription = () => {
     e.preventDefault();
     
     const hasMeds = medicines.some(m => m.name.trim() !== '');
+    if (selectedFile && !scanReviewConfirmed) {
+      alert('Review the uploaded prescription and confirm the extracted details before saving.');
+      return;
+    }
     if (!selectedFile && !diagnosis.trim()) {
       alert('Primary diagnosis is required if no prescription file is uploaded.');
       return;
@@ -407,7 +423,7 @@ const WritePrescription = () => {
               />
             </label>
             <span id="rx-file-help" style={{ display: 'block', marginBottom: '12px', color: 'var(--text-muted)', fontSize: '0.78rem' }}>
-              Upload a PDF or an image of the prescription (JPG, JPEG, PNG, or WebP). The selected image will be previewed below.
+              Upload a PDF or a clear image (JPG, JPEG, PNG, or WebP). Include the full page, keep text in focus, avoid glare and shadows, and capture all medicine rows.
             </span>
             {selectedImagePreview && (
               <img
@@ -491,6 +507,11 @@ const WritePrescription = () => {
                               required
                               style={{ width: '140px', padding: '6px 10px' }}
                             />
+                            {med.source === 'scan' && (
+                              <small style={{ display: 'block', margin: '4px 0 0 4px', color: med.confidence === 'high' ? '#15803d' : med.confidence === 'medium' ? '#a16207' : '#b91c1c' }}>
+                                AI estimate: {med.confidence || 'low'} — verify
+                              </small>
+                            )}
                           </td>
                           <td style={{ padding: '6px 4px' }}>
                             <input
@@ -567,6 +588,19 @@ const WritePrescription = () => {
                 <div style={{ padding: '16px', border: '1px dashed var(--border)', borderRadius: '12px', color: 'var(--text-muted)', fontSize: '0.9rem' }}>
                   No medicines added yet. Add them here manually or upload a scan to detect them.
                 </div>
+              )}
+              {selectedFile && (
+                <label style={{ display: 'flex', alignItems: 'flex-start', gap: '10px', marginTop: '16px', padding: '12px', borderRadius: '8px', background: '#fff7ed', color: '#7c2d12' }}>
+                  <input
+                    type="checkbox"
+                    checked={scanReviewConfirmed}
+                    onChange={(event) => setScanReviewConfirmed(event.target.checked)}
+                    disabled={ocrLoading}
+                    required
+                    style={{ marginTop: '4px' }}
+                  />
+                  <span>I reviewed the original scan and verified the medicine names, dose, timing, duration, and quantity. OCR suggestions are not verified automatically.</span>
+                </label>
               )}
               <button
                 type="button"

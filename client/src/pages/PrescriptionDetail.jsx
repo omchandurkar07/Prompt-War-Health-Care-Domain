@@ -1,9 +1,11 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useCallback } from 'react';
 import axios from 'axios';
 import { useParams, Link } from 'react-router-dom';
+import { useAuth } from '../context/AuthContext';
 
 const PrescriptionDetail = () => {
   const { rx_id } = useParams();
+  const { role } = useAuth();
   const [data, setData] = useState(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
@@ -12,9 +14,12 @@ const PrescriptionDetail = () => {
   const [regenLanguage, setRegenLanguage] = useState('English');
   const [regenLoading, setRegenLoading] = useState(false);
 
-  const fetchPrescription = async () => {
+  const fetchPrescription = useCallback(async () => {
     try {
-      const res = await axios.get(`/api/prescriptions/${rx_id}`);
+      const endpoint = role === 'patient'
+        ? `/api/patient/prescriptions/${rx_id}/details`
+        : `/api/prescriptions/${rx_id}`;
+      const res = await axios.get(endpoint);
       if (res.data && res.data.ok) {
         setData(res.data);
         if (res.data.rx) {
@@ -25,15 +30,15 @@ const PrescriptionDetail = () => {
       }
     } catch (err) {
       console.error(err);
-      setError('You are not authorized to view this prescription, or it does not exist.');
+      setError(err.response?.data?.error || 'Unable to load this prescription.');
     } finally {
       setLoading(false);
     }
-  };
+  }, [role, rx_id]);
 
   useEffect(() => {
     fetchPrescription();
-  }, [rx_id]);
+  }, [fetchPrescription]);
 
   const handleRegenerateAI = async () => {
     setRegenLoading(true);

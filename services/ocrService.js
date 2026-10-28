@@ -1,14 +1,16 @@
 const Tesseract = require('tesseract.js');
 const fs = require('fs');
 const { normalizeExtractedMedicines } = require('./prescriptionExtraction');
+const { preparePrescriptionImage } = require('./prescriptionImage');
 
-const extractMedicinesFromImage = async (filePath) => {
+const extractMedicinesFromImage = async (filePath, preparedBuffer = null) => {
   const result = { raw_text: '', medicines: [], ocr_available: false };
   if (!filePath || !fs.existsSync(filePath)) return result;
 
   try {
     console.log(`[OCR] Parsing image file: ${filePath}`);
-    const ocrResult = await Tesseract.recognize(filePath, 'eng');
+    const imageBuffer = preparedBuffer || (await preparePrescriptionImage(filePath)).buffer;
+    const ocrResult = await Tesseract.recognize(imageBuffer, 'eng');
     const rawText = ocrResult.data.text || '';
     result.raw_text = rawText.trim();
     result.ocr_available = true;
@@ -42,7 +44,7 @@ const parseLines = (text) => {
     const duration = line.match(durationRegex)?.[0] || '';
     const quantityMatch = line.match(quantityRegex);
     const quantity = quantityMatch?.[1] || quantityMatch?.[2] || '';
-    const medicineLine = line.replace(/^\s*(?:syp|syrup)\.?\s+/i, '');
+    const medicineLine = line.replace(/^\s*(?:tab(?:let)?s?|cap(?:sule)?s?|syp(?:rup)?|inj(?:ection)?|cream|oint(?:ment)?|drop)s?\.?\s+/i, '');
 
     if (!strength && !unitsPerDose && !schedule && !duration && !quantity) continue;
 
@@ -54,13 +56,14 @@ const parseLines = (text) => {
       .replace(durationRegex, ' ')
       .replace(quantityRegex, ' ')
       .replace(/\b(?:tab(?:let)?s?|cap(?:sule)?s?|oral|po|after food|before food|once|twice|thrice|daily|bd|bid|tds|tid|qid|qds|sos|prn|q\s*\d+\s*h)\b/gi, ' ')
+      .replace(/\b(?:take|with|for|after|before|food|meal|meals|at|and|then)\b/gi, ' ')
       .replace(/\bx\b/gi, ' ')
       .replace(/[0-9#]+/g, ' ')
       .replace(/[×/,:;|()[\]{}]+/g, ' ')
       .replace(/\s+/g, ' ')
       .trim();
 
-    if (name.length < 2 || irrelevantRegex.test(name)) continue;
+    if (name.length < 2 || irrelevantRegex.test(name) || /^(?:take|with|for|after|before|food|meal|daily|morning|night)$/i.test(name)) continue;
 
     medicines.push({
       name: name.substring(0, 120),
