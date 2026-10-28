@@ -1,0 +1,63 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="410" viewBox="0 0 1200 410" role="img" aria-labelledby="title description">
+  <title id="title">Appointment payment and rescheduling flow</title>
+  <desc id="description">Patients book an appointment and go to checkout. A successful payment continues care; a failed payment notifies the doctor, who can propose a new slot and message the patient.</desc>
+  <defs>
+    <marker id="arrow" markerWidth="10" markerHeight="10" refX="8" refY="5" orient="auto">
+      <path d="M0 0L10 5 0 10z" fill="#7892a2"/>
+    </marker>
+    <filter id="shadow" x="-20%" y="-20%" width="140%" height="150%">
+      <feDropShadow dx="0" dy="5" stdDeviation="7" flood-color="#25495d" flood-opacity=".10"/>
+    </filter>
+  </defs>
+  <rect width="1200" height="410" rx="26" fill="#f5fafc"/>
+  <g font-family="Segoe UI, Arial, sans-serif">
+    <text x="48" y="52" fill="#18384c" font-size="22" font-weight="700">Appointment to checkout</text>
+    <text x="48" y="77" fill="#667f8d" font-size="13">Payment failure can lead to a doctor-proposed reschedule and patient notification.</text>
+
+    <g filter="url(#shadow)">
+      <rect x="48" y="132" width="194" height="92" rx="16" fill="#fff"/>
+      <rect x="280" y="132" width="194" height="92" rx="16" fill="#fff"/>
+      <rect x="512" y="132" width="194" height="92" rx="16" fill="#fff"/>
+      <rect x="824" y="108" width="300" height="82" rx="16" fill="#eaf7f0"/>
+      <rect x="824" y="238" width="300" height="116" rx="16" fill="#fff4e9"/>
+    </g>
+
+    <g fill="none" stroke="#7892a2" stroke-width="2.5" marker-end="url(#arrow)">
+      <path d="M242 178h31"/>
+      <path d="M474 178h31"/>
+      <path d="M706 178h49q25 0 25-26v-3q0-24 25-24h8"/>
+      <path d="M706 178h49q25 0 25 26v8q0 26 25 26h8"/>
+    </g>
+
+    <g text-anchor="middle">
+      <circle cx="79" cy="158" r="14" fill="#e3f1fb"/>
+      <text x="79" y="163" fill="#3676a0" font-size="12" font-weight="700">1</text>
+      <text x="145" y="174" fill="#26465a" font-size="15" font-weight="700">Patient books</text>
+      <text x="145" y="199" fill="#6b8290" font-size="12">Choose doctor and slot</text>
+
+      <circle cx="311" cy="158" r="14" fill="#e5f4ed"/>
+      <text x="311" y="163" fill="#368160" font-size="12" font-weight="700">2</text>
+      <text x="377" y="174" fill="#26465a" font-size="15" font-weight="700">Booking confirmed</text>
+      <text x="377" y="199" fill="#6b8290" font-size="12">No doctor approval wait</text>
+
+      <circle cx="543" cy="158" r="14" fill="#f0ebfb"/>
+      <text x="543" y="163" fill="#7359a5" font-size="12" font-weight="700">3</text>
+      <text x="609" y="174" fill="#26465a" font-size="15" font-weight="700">Checkout</text>
+      <text x="609" y="199" fill="#6b8290" font-size="12">Razorpay or dev simulation</text>
+
+      <text x="974" y="145" fill="#315e45" font-size="15" font-weight="700">Payment succeeds</text>
+      <text x="974" y="169" fill="#64806f" font-size="12">Continue with the appointment</text>
+
+      <text x="974" y="270" fill="#765632" font-size="15" font-weight="700">Payment fails</text>
+      <text x="974" y="293" fill="#8a7254" font-size="12">Doctor is notified and may offer a new slot.</text>
+      <text x="974" y="314" fill="#8a7254" font-size="12">Patient receives the doctor's message and can retry.</text>
+      <text x="974" y="338" fill="#9b7b52" font-size="10">Simulation does not make a real charge.</text>
+    </g>
+
+    <rect x="760" y="158" width="18" height="18" transform="rotate(45 769 167)" fill="#dbeaf2" stroke="#91aebe"/>
+    <text x="770" y="202" fill="#657f8d" font-size="10" text-anchor="middle">result</text>
+    <path d="M824 316h-18q-29 0-29-28V211q0-25-25-25h-45" fill="none" stroke="#d19b54" stroke-width="2" stroke-dasharray="6 5" marker-end="url(#arrow)"/>
+    <text x="742" y="278" fill="#96754d" font-size="10" text-anchor="end">reschedule and retry</text>
+    <text x="48" y="384" fill="#8295a0" font-size="11">Illustrative workflow; available options depend on appointment state and payment-provider configuration.</text>
+  </g>
+</svg>
