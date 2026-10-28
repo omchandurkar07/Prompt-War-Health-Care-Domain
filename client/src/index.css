@@ -1277,6 +1277,124 @@ button {
   transition: transform 0.2s ease, box-shadow 0.2s ease;
 }
 
+.payment-action-button {
+  position: relative;
+  display: inline-flex;
+  min-width: 190px;
+  min-height: 48px;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  padding: 11px 18px;
+  overflow: hidden;
+  border: 0;
+  border-radius: 9px;
+  background: #1a1a1a;
+  color: #fff;
+  cursor: pointer;
+  font: inherit;
+  font-size: 0.9rem;
+  font-weight: 600;
+  transition: transform 0.3s ease, box-shadow 0.3s ease, background-color 0.3s ease;
+}
+
+.payment-action-button:hover:not(:disabled) {
+  transform: translateY(-2px);
+  box-shadow: 0 5px 15px rgba(0, 0, 0, 0.4);
+}
+
+.payment-action-button:focus-visible {
+  outline: 3px solid #22c55e;
+  outline-offset: 3px;
+}
+
+.payment-action-button:disabled {
+  cursor: wait;
+}
+
+.payment-action-button.is-complete {
+  background: #166534;
+}
+
+.payment-action-text {
+  white-space: nowrap;
+}
+
+.payment-action-icons {
+  position: relative;
+  width: 24px;
+  height: 24px;
+  flex: 0 0 24px;
+}
+
+.payment-action-icon {
+  position: absolute;
+  inset: 0;
+  width: 24px;
+  height: 24px;
+  color: #22c55e;
+  opacity: 0;
+  visibility: hidden;
+}
+
+.payment-wallet-icon {
+  opacity: 1;
+  visibility: visible;
+}
+
+.payment-action-button:hover:not(.is-complete) .payment-wallet-icon {
+  opacity: 0;
+  visibility: hidden;
+}
+
+.payment-action-button:hover:not(.is-complete) .payment-card-icon {
+  animation: payment-icon-cycle 2.5s infinite;
+}
+
+.payment-action-button:hover:not(.is-complete) .payment-method-icon {
+  animation: payment-icon-cycle 2.5s infinite 0.5s;
+}
+
+.payment-action-button:hover:not(.is-complete) .payment-currency-icon {
+  animation: payment-icon-cycle 2.5s infinite 1s;
+}
+
+.payment-action-button:hover:not(.is-complete) .payment-check-icon {
+  animation: payment-icon-cycle 2.5s infinite 1.5s;
+}
+
+.payment-action-button.is-complete .payment-action-icon {
+  opacity: 0;
+  visibility: hidden;
+  animation: none;
+}
+
+.payment-action-button.is-complete .payment-check-icon {
+  opacity: 1;
+  visibility: visible;
+  animation: payment-check-appear 0.6s ease both;
+}
+
+@keyframes payment-icon-cycle {
+  0%, 100% { opacity: 0; visibility: hidden; transform: translateY(-10px) scale(0.5); }
+  5%, 15% { opacity: 1; visibility: visible; transform: translateY(0) scale(1); }
+  20% { opacity: 0; visibility: hidden; transform: translateY(10px) scale(0.5); }
+}
+
+@keyframes payment-check-appear {
+  0% { opacity: 0; transform: scale(0.5) rotate(-45deg); }
+  50% { opacity: 0.6; transform: scale(1.2) rotate(0); }
+  100% { opacity: 1; transform: scale(1) rotate(0); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .payment-action-button,
+  .payment-action-icon {
+    transition: none;
+    animation: none !important;
+  }
+}
+
 .consultation-send-button::before {
   position: absolute;
   z-index: 0;

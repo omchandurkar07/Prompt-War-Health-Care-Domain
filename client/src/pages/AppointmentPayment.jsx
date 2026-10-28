@@ -21,6 +21,7 @@ const AppointmentPayment = () => {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
   const [message, setMessage] = useState('');
+  const [paymentComplete, setPaymentComplete] = useState(false);
 
   useEffect(() => {
     let active = true;
@@ -52,6 +53,7 @@ const AppointmentPayment = () => {
       });
       if (!data?.ok) throw new Error(data?.error || 'Unable to update the simulated payment.');
       if (result === 'paid') {
+        setPaymentComplete(true);
         setMessage(data.message || 'Demo payment recorded. No money was charged.');
         setTimeout(() => navigate('/dashboard#appointments'), 1200);
       } else {
@@ -86,6 +88,7 @@ const AppointmentPayment = () => {
           try {
             const response = await axios.post(`/api/payments/verify/${aid}`, gatewayResponse);
             if (!response.data?.ok) throw new Error(response.data?.error || 'Payment verification is pending.');
+            setPaymentComplete(true);
             setMessage('Payment confirmed.');
             setTimeout(() => navigate('/dashboard#appointments'), 1200);
           } catch (verificationError) {
@@ -117,6 +120,38 @@ const AppointmentPayment = () => {
     }
   };
 
+  const renderPaymentButton = (label, loadingLabel, onClick) => (
+    <button
+      type="button"
+      className={`payment-action-button${paymentComplete ? ' is-complete' : ''}`}
+      disabled={busy || paymentComplete}
+      onClick={onClick}
+      aria-busy={busy}
+      aria-live="polite"
+    >
+      <span className="payment-action-text">
+        {paymentComplete ? 'Payment Complete' : busy ? loadingLabel : label}
+      </span>
+      <span className="payment-action-icons" aria-hidden="true">
+        <svg viewBox="0 0 24 24" className="payment-action-icon payment-card-icon">
+          <path d="M20 8H4V6H20M20 18H4V12H20M20 4H4C2.89 4 2 4.89 2 6V18C2 19.11 2.89 20 4 20H20C21.11 20 22 19.11 22 18V6C22 4.89 21.11 4 20 4Z" fill="currentColor" />
+        </svg>
+        <svg viewBox="0 0 24 24" className="payment-action-icon payment-method-icon">
+          <path d="M2 17H22V21H2V17M6.25 7H9V6H6V3H18V6H15V7H17.75L19 17H5L6.25 7M9 10H15V8H9V10M9 13H15V11H9V13Z" fill="currentColor" />
+        </svg>
+        <svg viewBox="0 0 24 24" className="payment-action-icon payment-currency-icon">
+          <path d="M11.8 10.9c-2.27-.59-3-1.2-3-2.15 0-1.09 1.01-1.85 2.7-1.85 1.78 0 2.44.85 2.5 2.1h2.21c-.07-1.72-1.12-3.3-3.21-3.81V3h-3v2.16c-1.94.42-3.5 1.68-3.5 3.61 0 2.31 1.91 3.46 4.7 4.13 2.5.6 3 1.48 3 2.41 0 .69-.49 1.79-2.7 1.79-2.06 0-2.87-.92-2.98-2.1h-2.2c.12 2.19 1.76 3.42 3.68 3.83V21h3v-2.15c1.95-.37 3.5-1.5 3.5-3.55 0-2.84-2.43-3.81-4.7-4.4z" fill="currentColor" />
+        </svg>
+        <svg viewBox="0 0 24 24" className="payment-action-icon payment-wallet-icon">
+          <path d="M21 18V19A2 2 0 0 1 19 21H5C3.89 21 3 20.1 3 19V5A2 2 0 0 1 5 3H19A2 2 0 0 1 21 5V6H12C10.89 6 10 6.9 10 8V16A2 2 0 0 0 12 18M12 16H22V8H12M16 13.5A1.5 1.5 0 0 1 14.5 12A1.5 1.5 0 0 1 16 10.5A1.5 1.5 0 0 1 17.5 12A1.5 1.5 0 0 1 16 13.5Z" fill="currentColor" />
+        </svg>
+        <svg viewBox="0 0 24 24" className="payment-action-icon payment-check-icon">
+          <path d="M9 16.17 4.83 12 3.41 13.41 9 19 21 7 19.59 5.59 9 16.17Z" fill="currentColor" />
+        </svg>
+      </span>
+    </button>
+  );
+
   return (
     <div className="container" style={{ maxWidth: '720px', padding: '48px 20px' }}>
       <div className="glass" style={{ padding: '30px', textAlign: 'center' }}>
@@ -138,18 +173,14 @@ const AppointmentPayment = () => {
                   No money will be charged. Choose a result to test the payment flow.
                 </p>
                 <div style={{ display: 'flex', justifyContent: 'center', gap: '10px', flexWrap: 'wrap' }}>
-                  <button className="btn btn-success" disabled={busy} onClick={() => handleSimulation('paid')}>
-                    {busy ? 'Processing…' : 'Simulate successful payment'}
-                  </button>
+                  {renderPaymentButton('Pay Now', 'Processing…', () => handleSimulation('paid'))}
                   <button className="btn btn-outline" disabled={busy} onClick={() => handleSimulation('failed')}>
                     Simulate payment failure
                   </button>
                 </div>
               </div>
             ) : (
-              <button className="btn btn-primary" disabled={busy} onClick={openRazorpay}>
-                {busy ? 'Opening checkout…' : 'Continue to secure payment'}
-              </button>
+              renderPaymentButton('Pay Now', 'Opening checkout…', openRazorpay)
             )}
           </>
         )}
