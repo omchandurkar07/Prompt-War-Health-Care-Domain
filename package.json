@@ -1,0 +1,46 @@
+{
+  "name": "asep-2-project",
+  "version": "1.0.0",
+  "description": "",
+  "main": "index.js",
+  "scripts": {
+    "start": "node server.js",
+    "test": "echo \"Error: no test specified\" && exit 1",
+    "build": "npm install && npm install --prefix client && npm run build --prefix client"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/omchandurkar07/asep-healthcare-project.git"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "type": "commonjs",
+  "bugs": {
+    "url": "https://github.com/omchandurkar07/asep-healthcare-project/issues"
+  },
+  "homepage": "https://github.com/omchandurkar07/asep-healthcare-project#readme",
+  "dependencies": {
+    "@google/generative-ai": "^0.24.1",
+    "axios": "^1.18.0",
+    "bcryptjs": "^3.0.3",
+    "cloudinary": "^2.10.0",
+    "connect-mongo": "^6.0.0",
+    "cors": "^2.8.6",
+    "dotenv": "^17.4.2",
+    "ejs": "^6.0.1",
+    "express": "^5.2.1",
+    "express-ejs-layouts": "^2.5.1",
+    "express-session": "^1.19.0",
+    "form-data": "^4.0.6",
+    "mongoose": "^9.7.1",
+    "multer": "^2.2.0",
+    "nodemailer": "^9.0.1",
+    "nodemon": "^3.1.14",
+    "pdfkit": "^0.19.1",
+    "qrcode": "^1.5.4",
+    "razorpay": "^2.9.8",
+    "tesseract.js": "^7.0.0",
+    "twilio": "^6.0.2"
+  }
+}

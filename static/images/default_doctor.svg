@@ -1,0 +1,8 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 160 160" role="img" aria-labelledby="title">
+  <title id="title">Doctor profile placeholder</title>
+  <rect width="160" height="160" rx="80" fill="#e8f3f2"/>
+  <circle cx="80" cy="58" r="29" fill="#8bbcb7"/>
+  <path d="M28 148c3-31 24-50 52-50s49 19 52 50" fill="#167d78"/>
+  <path d="M70 97v18a10 10 0 0 0 20 0V97" fill="#fff"/>
+  <path d="M80 105v20m-10-10h20" stroke="#167d78" stroke-linecap="round" stroke-width="5"/>
+</svg>

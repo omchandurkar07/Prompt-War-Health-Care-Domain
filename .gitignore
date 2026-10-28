@@ -1,0 +1,43 @@
+# Environment variables
+.env
+.env.*
+!.env.example
+
+# Node
+node_modules/
+npm-debug.log*
+client/node_modules/
+
+# Python
+.venv/
+venv/
+__pycache__/
+*.py[cod]
+
+# Database
+*.db
+
+# Logs
+*.log
+
+# Build files
+client/dist/
+client/build/
+
+# User uploads and generated clinical documents (except seeded doctor profile photos)
+static/uploads/*
+!static/uploads/doc_20260428234241_5251.png
+!static/uploads/doc_20260428235930_2656.png
+!static/uploads/doc_20260429000437_9906.png
+!static/uploads/doc_20260429001331_5662.png
+!static/uploads/doc_20260505181917_2840.png
+!static/uploads/doc_20260527153149_6818.png
+!static/uploads/doc_20260620060610_6271.png
+!static/uploads/doc_20260620060950_8917.png
+!static/uploads/doc_20260620062342_8341.png
+!static/uploads/doc_20260620062659_1293.png
+!static/uploads/doc_20260620063027_8999.png
+
+# OS
+.DS_Store
+Thumbs.db

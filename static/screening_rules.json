@@ -1,0 +1,17 @@
+[
+  {"name": "Annual Lipid Profile", "condition": "all", "min_age": 20, "gender": "all", "frequency": "Annual", "specialization": "General Physician", "description": "Check cholesterol and triglyceride levels"},
+  {"name": "Blood Pressure Check", "condition": "all", "min_age": 18, "gender": "all", "frequency": "Annual", "specialization": "General Physician", "description": "Screen for hypertension"},
+  {"name": "Blood Sugar (Fasting)", "condition": "all", "min_age": 30, "gender": "all", "frequency": "Annual", "specialization": "General Physician", "description": "Screen for diabetes"},
+  {"name": "HbA1c Test", "condition": "diabetes", "min_age": 0, "gender": "all", "frequency": "Every 3 months", "specialization": "Endocrinologist", "description": "Monitor long-term blood sugar control"},
+  {"name": "Eye Exam (Diabetic)", "condition": "diabetes", "min_age": 0, "gender": "all", "frequency": "Annual", "specialization": "Ophthalmologist", "description": "Screen for diabetic retinopathy"},
+  {"name": "Kidney Function Test", "condition": "diabetes,hypertension", "min_age": 0, "gender": "all", "frequency": "Annual", "specialization": "Nephrologist", "description": "Monitor kidney health"},
+  {"name": "Mammogram", "condition": "all", "min_age": 40, "gender": "female", "frequency": "Annual", "specialization": "General Surgeon", "description": "Breast cancer screening"},
+  {"name": "Pap Smear", "condition": "all", "min_age": 21, "gender": "female", "frequency": "Every 3 years", "specialization": "Gynecologist", "description": "Cervical cancer screening"},
+  {"name": "Bone Density (DEXA)", "condition": "all", "min_age": 50, "gender": "female", "frequency": "Every 2 years", "specialization": "Orthopedic Surgeon", "description": "Screen for osteoporosis"},
+  {"name": "Prostate PSA Test", "condition": "all", "min_age": 50, "gender": "male", "frequency": "Annual", "specialization": "Urologist", "description": "Prostate cancer screening"},
+  {"name": "Colonoscopy", "condition": "all", "min_age": 50, "gender": "all", "frequency": "Every 10 years", "specialization": "Gastroenterologist", "description": "Colorectal cancer screening"},
+  {"name": "Thyroid Panel (TSH)", "condition": "all", "min_age": 35, "gender": "female", "frequency": "Every 5 years", "specialization": "Endocrinologist", "description": "Screen for thyroid disorders"},
+  {"name": "ECG / Cardiac Check", "condition": "hypertension", "min_age": 40, "gender": "all", "frequency": "Annual", "specialization": "Cardiologist", "description": "Heart health monitoring"},
+  {"name": "Vitamin D Test", "condition": "all", "min_age": 25, "gender": "all", "frequency": "Annual", "specialization": "General Physician", "description": "Check vitamin D levels"},
+  {"name": "Complete Blood Count", "condition": "all", "min_age": 18, "gender": "all", "frequency": "Annual", "specialization": "General Physician", "description": "General health screening"}
+]

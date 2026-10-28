@@ -1,0 +1,42 @@
+const mongoose = require('mongoose');
+
+const DoctorSchema = new mongoose.Schema({
+  full_name: { type: String, required: true },
+  email: { type: String, required: true, unique: true, lowercase: true, trim: true },
+  password_hash: { type: String, required: true },
+  phone: { type: String, trim: true },
+  specialization: { type: String, required: true },
+  qualification: { type: String },
+  experience_years: { type: Number, default: 0 },
+  bio: { type: String },
+  profile_image: { type: String, default: '/static/images/default_doctor.svg' },
+  hospital_name: { type: String },
+  clinic_address: { type: String },
+  city: { type: String, default: '' },
+  state: { type: String, default: '' },
+  pincode: { type: String, default: '' },
+  consultation_fee: { type: Number, default: 500 },
+  home_visit_available: { type: Boolean, default: false },
+  home_visit_fee: { type: Number, default: 0 },
+  available_days: { type: String, default: 'Mon,Tue,Wed,Thu,Fri' },
+  slot_start: { type: String, default: '09:00' },
+  slot_end: { type: String, default: '17:00' },
+  slot_duration: { type: Number, default: 30 },
+  break_start: { type: String, default: '13:00' },
+  break_end: { type: String, default: '14:00' },
+  is_available: { type: Boolean, default: true },
+  is_approved: { type: Boolean, default: false },
+  rating_avg: { type: Number, default: 0.0 },
+  rating_count: { type: Number, default: 0 },
+  total_patients: { type: Number, default: 0 },
+  response_time_avg: { type: Number, default: 0 },
+  digital_signature: { type: String, default: '' },
+  registration_number: { type: String, default: '' },
+  latitude: { type: Number },
+  longitude: { type: Number },
+  degree_certificate: { type: String, default: '' },
+  created_at: { type: Date, default: Date.now },
+  last_active: { type: Date, default: Date.now }
+});
+
+module.exports = mongoose.model('Doctor', DoctorSchema);
