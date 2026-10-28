@@ -114,6 +114,7 @@ ml/                     ML support data
 docs/images/             README illustrations
 server.js               Express application entry point
 ml_server.py            Optional Flask helper
+app.py                  Flask WSGI entry point for hosting platforms
 package.json            Backend dependencies and root commands
 client/package.json     Frontend dependencies and client commands
 requirements.txt        Python helper dependencies
@@ -229,6 +230,18 @@ If configuring the service directly in the Render dashboard, use:
 Set `MONGO_URI` and a unique `SECRET_KEY` in Render's environment settings, along with credentials for any integrations you enable. MongoDB must be reachable from the Render service. Deploy the commit containing the configuration; `npm install` alone does not create `client/dist`.
 
 The optional ML helper is not configured by this Render Blueprint. Without a separate Python service or installed Python dependencies, ML-dependent symptom routes may be unavailable; this does not explain a missing React production build.
+
+### Deploying the Flask helper separately
+
+If a Python host cannot discover the Flask application automatically, use the repository-root entry point `app.py` (it exports the Flask application defined in `ml_server.py`). Configure the Python service with:
+
+| Python service setting | Value |
+|---|---|
+| Build Command | `pip install -r requirements.txt` |
+| Start Command | `gunicorn app:app` |
+| Health Check Path | `/api/ml-symptoms` |
+
+Set `ML_URL` on the Node service to the deployed Flask service's base URL (for example, `https://your-ml-service.example.com`). Keep the Flask service URL free of the `/api/ml-symptoms` suffix; the Node application adds the endpoint paths itself.
 
 ## Privacy, security, and clinical limitations
 
