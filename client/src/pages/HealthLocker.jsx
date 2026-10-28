@@ -30,6 +30,7 @@ const HealthLocker = () => {
   const [file, setFile] = useState(null);
   const [uploadLoading, setUploadLoading] = useState(false);
   const [uploadMessage, setUploadMessage] = useState('');
+  const [exportLoading, setExportLoading] = useState(false);
 
   // Sharing State
   const [selectedRecords, setSelectedRecords] = useState([]);
@@ -70,6 +71,26 @@ const HealthLocker = () => {
   const handleSearchSubmit = (e) => {
     e.preventDefault();
     setSubmittedSearch(search.trim());
+  };
+
+  const handleExport = async () => {
+    setExportLoading(true);
+    try {
+      const response = await axios.get('/api/health-locker/export', { responseType: 'blob' });
+      const downloadUrl = URL.createObjectURL(response.data);
+      const link = document.createElement('a');
+      link.href = downloadUrl;
+      link.download = 'health-records.json';
+      document.body.appendChild(link);
+      link.click();
+      link.remove();
+      window.setTimeout(() => URL.revokeObjectURL(downloadUrl), 1000);
+    } catch (exportError) {
+      console.error(exportError);
+      alert(exportError.response?.data?.error || 'Unable to export your health records.');
+    } finally {
+      setExportLoading(false);
+    }
   };
 
   const handleClearFilters = () => {
@@ -231,9 +252,14 @@ const HealthLocker = () => {
           <h1 style={{ fontSize: '1.85rem', fontWeight: 800, margin: 0 }}>Smart Health Locker</h1>
           <p style={{ color: 'var(--text-muted)', fontSize: '0.9rem', marginTop: '4px' }}>Secure, encrypted repository for prescriptions, scan reports, and clinic summaries.</p>
         </div>
-        <button onClick={() => setShowUpload(true)} className="btn btn-primary btn-sm">
-          📤 Upload Document
-        </button>
+        <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap' }}>
+          <button onClick={handleExport} className="btn btn-outline btn-sm" disabled={exportLoading}>
+            {exportLoading ? 'Preparing export...' : '⬇ Export my records'}
+          </button>
+          <button onClick={() => setShowUpload(true)} className="btn btn-primary btn-sm">
+            📤 Upload Document
+          </button>
+        </div>
       </div>
 
       <div className="row g-4">

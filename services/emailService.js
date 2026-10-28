@@ -39,15 +39,15 @@ const sendOtpEmail = async (email, otpCode) => {
   }
 };
 
-const sendAppointmentBookingEmail = async (email, doctorName, apptDate, apptTime) => {
+const sendAppointmentBookingEmail = async (email, doctorName, apptDate, apptTime, paymentRequired = true) => {
   try {
     const transporter = createEmailTransporter();
     const nameStr = doctorName.startsWith('Dr. ') ? doctorName : `Dr. ${doctorName}`;
     const mailOptions = {
       from: process.env.MAIL_USERNAME || 'ultracare02@gmail.com',
       to: email,
-      subject: 'UltraCare Appointment Booking Request Received',
-      text: `Hello,\n\nWe have received your appointment request on UltraCare:\n\nDoctor: ${nameStr}\nDate: ${apptDate}\nTime: ${apptTime}\n\nThe doctor has been notified and will approve/reject your request shortly. You will receive an in-app and email notification as soon as the status is updated.\n\nThank you for choosing UltraCare!\n\nBest regards,\nThe UltraCare Team`,
+      subject: 'Your UltraCare Appointment Is Booked',
+      text: `Hello,\n\nYour appointment is booked on UltraCare:\n\nDoctor: ${nameStr}\nDate: ${apptDate}\nTime: ${apptTime}\n\nThe doctor has been notified.${paymentRequired ? ' Please complete payment from your dashboard to finalize the booking.' : ''}\n\nThank you for choosing UltraCare!\n\nBest regards,\nThe UltraCare Team`,
     };
     await transporter.sendMail(mailOptions);
     console.log(`[APPT-EMAIL] Booking notification sent to ${email}`);

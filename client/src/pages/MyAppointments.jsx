@@ -13,6 +13,8 @@ const MyAppointments = () => {
   const [doctorNotes, setDoctorNotes] = useState('');
   const [file, setFile] = useState(null);
   const [compLoading, setCompLoading] = useState(false);
+  const [paymentReschedule, setPaymentReschedule] = useState(null);
+  const [paymentRescheduleBusy, setPaymentRescheduleBusy] = useState(false);
 
   const fetchAppointments = async () => {
     setLoading(true);
@@ -61,6 +63,38 @@ const MyAppointments = () => {
       }
     } catch (err) {
       alert('Error updating appointment.');
+    }
+  };
+
+  const handleRescheduleDecision = async (aid, decision) => {
+    const action = decision === 'accept' ? 'approve' : 'decline';
+    if (!window.confirm(`Are you sure you want to ${action} this reschedule request?`)) return;
+    try {
+      const response = await axios.post(`/api/doctor/appointment/${aid}/reschedule/${decision}`);
+      if (!response.data?.ok) throw new Error(response.data?.error || `Unable to ${action} request.`);
+      alert(response.data.message);
+      fetchAppointments();
+    } catch (requestError) {
+      console.error(requestError);
+      alert(requestError.response?.data?.error || requestError.message || `Unable to ${action} request.`);
+    }
+  };
+
+  const handlePaymentReschedule = async (event, aid) => {
+    event.preventDefault();
+    if (!paymentReschedule?.appt_date || !paymentReschedule?.time_slot || !paymentReschedule?.message.trim()) return;
+    setPaymentRescheduleBusy(true);
+    try {
+      const response = await axios.post(`/api/doctor/appointment/${aid}/payment-reschedule`, paymentReschedule);
+      if (!response.data?.ok) throw new Error(response.data?.error || 'Unable to reschedule appointment.');
+      alert(response.data.message);
+      setPaymentReschedule(null);
+      fetchAppointments();
+    } catch (requestError) {
+      console.error(requestError);
+      alert(requestError.response?.data?.error || requestError.message || 'Unable to reschedule appointment.');
+    } finally {
+      setPaymentRescheduleBusy(false);
     }
   };
 
@@ -200,6 +234,11 @@ const MyAppointments = () => {
                 <span style={{ fontSize: '0.8rem', color: 'var(--text-muted)' }}>
                   📅 Scheduled Date: <strong>{appt.appt_date}</strong> at ⏰ <strong>{appt.time_slot}</strong> ({appt.appt_type} mode)
                 </span>
+                {appt.payment_status === 'failed' && (
+                  <p role="status" style={{ color: '#b91c1c', fontSize: '0.82rem', margin: '6px 0 0' }}>
+                    Payment failed. You can reschedule this appointment and send the patient a message.
+                  </p>
+                )}
                 {appt.reason && (
                   <p style={{ fontSize: '0.78rem', color: 'var(--text-muted)', margin: '6px 0 0', fontStyle: 'italic' }}>
                     Reason: "{appt.reason}"
@@ -218,15 +257,81 @@ const MyAppointments = () => {
 
                 {appt.status === 'confirmed' && (
                   <>
+                    {appt.payment_status === 'failed' && (
+                      <button
+                        type="button"
+                        className="btn btn-warning btn-xs"
+                        onClick={() => setPaymentReschedule(paymentReschedule?._id === appt._id
+                          ? null
+                          : { _id: appt._id, appt_date: '', time_slot: '', message: '' })}
+                      >
+                        {paymentReschedule?._id === appt._id ? 'Close reschedule' : 'Reschedule after payment failure'}
+                      </button>
+                    )}
+                    {appt.reschedule_request?.requested_at && (
+                      <div style={{ flexBasis: '100%', color: 'var(--text-muted)', fontSize: '0.82rem' }}>
+                        Patient requests {appt.reschedule_request.appt_date} at {appt.reschedule_request.time_slot}.
+                        <div style={{ display: 'flex', gap: '8px', marginTop: '8px' }}>
+                          <button onClick={() => handleRescheduleDecision(appt._id, 'accept')} className="btn btn-success btn-xs">Approve change</button>
+                          <button onClick={() => handleRescheduleDecision(appt._id, 'decline')} className="btn btn-outline btn-xs">Decline change</button>
+                        </div>
+                      </div>
+                    )}
                     {appt.appt_type === 'video' && (
                       <Link to={`/consultation/video/${appt._id}`} className="btn btn-success btn-xs">🎥 Join Call</Link>
                     )}
+                    <Link to={`/consultation/messages/${appt._id}`} className="btn btn-outline btn-xs">💬 Message patient</Link>
                     <Link to={`/doctor/care-plan/${appt._id}`} className="btn btn-outline btn-xs">💊 Set Care Plan</Link>
                     <button onClick={() => setCompletingAppt(appt)} className="btn btn-primary btn-xs" style={{ background: '#059669', borderColor: '#059669', color: '#fff' }}>Complete Consult</button>
                   </>
                 )}
+                {appt.status === 'completed' && (
+                  <Link to={`/consultation/messages/${appt._id}`} className="btn btn-outline btn-xs">💬 Message patient</Link>
+                )}
               </div>
-
+              {paymentReschedule?._id === appt._id && (
+                <form
+                  onSubmit={(event) => handlePaymentReschedule(event, appt._id)}
+                  style={{ flexBasis: '100%', display: 'flex', gap: '10px', alignItems: 'end', flexWrap: 'wrap' }}
+                >
+                  <label style={{ fontSize: '0.8rem' }}>
+                    New date
+                    <input
+                      type="date"
+                      required
+                      min={new Date(Date.now() + 86400000).toISOString().slice(0, 10)}
+                      value={paymentReschedule.appt_date}
+                      onChange={(event) => setPaymentReschedule({ ...paymentReschedule, appt_date: event.target.value })}
+                      className="form-control form-control-sm"
+                    />
+                  </label>
+                  <label style={{ fontSize: '0.8rem' }}>
+                    New time
+                    <input
+                      type="time"
+                      required
+                      value={paymentReschedule.time_slot}
+                      onChange={(event) => setPaymentReschedule({ ...paymentReschedule, time_slot: event.target.value })}
+                      className="form-control form-control-sm"
+                    />
+                  </label>
+                  <label style={{ flex: '1 1 240px', fontSize: '0.8rem' }}>
+                    Message for patient
+                    <textarea
+                      required
+                      maxLength={500}
+                      rows={2}
+                      value={paymentReschedule.message}
+                      onChange={(event) => setPaymentReschedule({ ...paymentReschedule, message: event.target.value })}
+                      className="form-control form-control-sm"
+                      placeholder="Explain the new appointment time to your patient"
+                    />
+                  </label>
+                  <button className="btn btn-primary btn-sm" disabled={paymentRescheduleBusy}>
+                    {paymentRescheduleBusy ? 'Sending…' : 'Reschedule and notify patient'}
+                  </button>
+                </form>
+              )}
             </div>
           ))}
         </div>

@@ -14,6 +14,25 @@ const {
 const router = express.Router();
 const isObjectId = value => mongoose.Types.ObjectId.isValid(value);
 
+const recordPaymentFailure = async (appointment, payment, failureMessage = '') => {
+  if (payment) {
+    payment.status = 'failed';
+    payment.updated_at = new Date();
+    await payment.save();
+  }
+  appointment.payment_status = 'failed';
+  appointment.updated_at = new Date();
+  await appointment.save();
+
+  await Notification.create({
+    user_id: appointment.doctor_id,
+    user_type: 'doctor',
+    title: 'Appointment payment failed',
+    message: `Payment failed for the appointment on ${appointment.appt_date} at ${appointment.time_slot}.${failureMessage ? ` ${failureMessage}` : ''} You can reschedule this appointment and notify the patient.`,
+    link: '/doctor/appointments'
+  });
+};
+
 const applyCapturedPayment = async (payment, gatewayPayment) => {
   if (
     gatewayPayment.order_id !== payment.razorpay_order_id ||
@@ -148,7 +167,7 @@ router.post('/payments/order/:aid', patientRequired, async (req, res) => {
     const appointment = await Appointment.findOne({ _id: aid, patient_id: req.session.patient_id });
     if (!appointment) return res.status(404).json({ ok: false, error: 'Appointment not found.' });
     if (appointment.status !== 'confirmed') {
-      return res.status(409).json({ ok: false, error: 'Payment is available after the doctor confirms the appointment.' });
+      return res.status(409).json({ ok: false, error: 'This appointment is not available for payment.' });
     }
     if (appointment.payment_status === 'completed') {
       return res.status(409).json({ ok: false, error: 'This appointment is already paid.' });
@@ -288,14 +307,61 @@ router.post('/payments/order/:aid', patientRequired, async (req, res) => {
         currency: 'INR'
       });
     } catch (error) {
-      payment.status = 'failed';
-      payment.updated_at = new Date();
-      await payment.save();
+      await recordPaymentFailure(appointment, payment);
       throw error;
     }
   } catch (error) {
     console.error('[PAYMENT] Order creation failed:', error.message || error);
     res.status(error.status || 502).json({ ok: false, error: error.status ? error.message : 'Unable to start checkout. Please try again.' });
+  }
+});
+
+router.post('/payments/fail/:aid', patientRequired, async (req, res) => {
+  const { aid } = req.params;
+  if (!isObjectId(aid)) return res.status(404).json({ ok: false, error: 'Appointment not found.' });
+
+  try {
+    const appointment = await Appointment.findOne({ _id: aid, patient_id: req.session.patient_id });
+    if (!appointment) return res.status(404).json({ ok: false, error: 'Appointment not found.' });
+    if (appointment.status !== 'confirmed' || appointment.payment_status === 'completed') {
+      return res.status(409).json({ ok: false, error: 'This appointment cannot be marked as a failed payment.' });
+    }
+
+    const mode = getPaymentMode();
+    if (req.body.payment_mode && req.body.payment_mode !== mode) {
+      return res.status(409).json({ ok: false, error: 'Payment mode does not match the current checkout.' });
+    }
+    const payment = await Payment.findOne({
+      appointment_id: appointment._id,
+      patient_id: req.session.patient_id
+    });
+    if (!payment || payment.payment_mode !== mode || !['created', 'failed'].includes(payment.status)) {
+      return res.status(409).json({ ok: false, error: 'No active payment attempt was found for this appointment.' });
+    }
+
+    if (payment.status !== 'failed') {
+      if (mode === 'razorpay') {
+        const paymentId = req.body.razorpay_payment_id;
+        if (typeof paymentId !== 'string' || !paymentId) {
+          return res.status(400).json({ ok: false, error: 'The failed payment could not be verified.' });
+        }
+        const gatewayPayment = await getRazorpayClient().payments.fetch(paymentId);
+        if (gatewayPayment.order_id !== payment.razorpay_order_id || gatewayPayment.status !== 'failed') {
+          return res.status(409).json({ ok: false, error: 'The payment provider has not confirmed this payment failure.' });
+        }
+      }
+      await recordPaymentFailure(appointment, payment, 'The patient can retry payment or wait for your reschedule message.');
+    }
+    res.json({
+      ok: true,
+      message: 'Payment failure recorded. Your doctor can reschedule the appointment and send you an update.'
+    });
+  } catch (error) {
+    console.error('[PAYMENT] Failed payment update failed:', error.message || error);
+    res.status(error.status || 500).json({
+      ok: false,
+      error: error.status ? error.message : 'Unable to record the payment failure.'
+    });
   }
 });
 

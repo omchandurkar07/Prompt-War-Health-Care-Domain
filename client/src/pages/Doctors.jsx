@@ -485,12 +485,11 @@ const Doctors = () => {
       });
 
       if (res.data && res.data.ok) {
-        setBookingMessage('🎉 Booking successful! Redirecting to confirmation page...');
-        setTimeout(() => {
-          setSelectedDoc(null);
-          setShowBooking(false);
-          navigate(`/dashboard`); // Navigate to patient dashboard to view request status
-        }, 2000);
+        setSelectedDoc(null);
+        setShowBooking(false);
+        navigate(res.data.payment_required
+          ? `/payment/${res.data.appointment_id}`
+          : '/dashboard');
       } else {
         setBookingMessage(`❌ ${res.data.error || 'Booking failed.'}`);
       }
@@ -995,6 +994,9 @@ const Doctors = () => {
                 <h3 style={{ fontSize: '1.25rem', fontWeight: 800, margin: 0, display: 'flex', alignItems: 'center', gap: '8px' }}>
                   📅 Book Consultation with Dr. {selectedDoc.full_name}
                 </h3>
+                <p style={{ margin: 0, color: 'var(--text-muted)', fontSize: '0.85rem' }}>
+                  Your appointment is booked immediately; payment follows booking.
+                </p>
                 
                 {bookingMessage && (
                   <div className={`alert ${bookingMessage.includes('successful') ? 'alert-success' : 'alert-danger'}`} style={{ padding: '10px 14px', fontSize: '0.85rem' }}>

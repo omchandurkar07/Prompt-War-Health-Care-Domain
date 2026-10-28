@@ -235,6 +235,53 @@ router.post('/health-locker/share', patientRequired, async (req, res) => {
   }
 });
 
+router.get('/health-locker/export', patientRequired, async (req, res) => {
+  const patientId = req.session.patient_id;
+  try {
+    const [patient, records, prescriptions] = await Promise.all([
+      Patient.findById(patientId).select('full_name email'),
+      HealthRecord.find({ patient_id: patientId }).sort({ record_date: -1, created_at: -1 }),
+      Prescription.find({ patient_id: patientId }).sort({ created_at: -1 })
+    ]);
+
+    if (!patient) {
+      return res.status(404).json({ ok: false, error: 'Patient account not found.' });
+    }
+
+    const exportData = {
+      exported_at: new Date().toISOString(),
+      patient: { full_name: patient.full_name, email: patient.email },
+      records: records.map(record => ({
+        title: record.title,
+        doc_type: record.doc_type,
+        description: record.description,
+        doctor_name: record.doctor_name,
+        tags: record.tags,
+        record_date: record.record_date,
+        family_member_id: record.family_member_id,
+        appointment_id: record.appointment_id
+      })),
+      prescriptions: prescriptions.map(prescription => ({
+        prescription_id: prescription.prescription_id,
+        diagnosis: prescription.diagnosis,
+        doctor_notes: prescription.doctor_notes,
+        advice: prescription.advice,
+        follow_up_date: prescription.follow_up_date,
+        medicines: prescription.medicines,
+        created_at: prescription.created_at
+      }))
+    };
+
+    const safeName = (patient.full_name || 'patient').toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '') || 'patient';
+    res.setHeader('Content-Type', 'application/json; charset=utf-8');
+    res.setHeader('Content-Disposition', `attachment; filename="${safeName}-health-records.json"`);
+    res.json(exportData);
+  } catch (error) {
+    console.error(error);
+    res.status(500).json({ ok: false, error: 'Unable to export health records.' });
+  }
+});
+
 router.get('/shared/:token', async (req, res) => {
   const { token } = req.params;
 

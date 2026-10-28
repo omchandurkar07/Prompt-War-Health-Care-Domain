@@ -3,6 +3,7 @@ const router = express.Router();
 
 const Appointment = require('../models/Appointment');
 const MedicineReminder = require('../models/MedicineReminder');
+const Notification = require('../models/Notification');
 const { sendWhatsappMessage } = require('../services/whatsappService');
 const { createEmailTransporter } = require('../services/emailService');
 
@@ -15,7 +16,8 @@ router.all('/api/cron/send-reminders', async (req, res) => {
   try {
     const appts = await Appointment.find({
       appt_date: tomorrow_str,
-      status: 'confirmed'
+      status: 'confirmed',
+      appointment_reminder_sent_at: { $exists: false }
     }).populate('patient_id').populate('doctor_id');
 
     let count = 0;
@@ -23,7 +25,8 @@ router.all('/api/cron/send-reminders', async (req, res) => {
     const transporter = createEmailTransporter();
 
     for (const appt of appts) {
-      if (appt.patient_id && appt.patient_id.email) {
+      if (appt.patient_id) {
+        let notificationCreated = false;
         try {
           // Format time slot (12-hour AM/PM)
           let time_str = appt.time_slot;
@@ -38,17 +41,32 @@ router.all('/api/cron/send-reminders', async (req, res) => {
 
           const dname = appt.doctor_id ? appt.doctor_id.full_name : 'Doctor';
           const cleanDname = dname.startsWith('Dr. ') ? dname : `Dr. ${dname}`;
-          const senderEmail = process.env.MAIL_USERNAME || 'ultracare02@gmail.com';
+          await new Notification({
+            user_id: appt.patient_id._id,
+            user_type: 'patient',
+            title: 'Appointment reminder',
+            message: `Reminder: You have an appointment with ${cleanDname} tomorrow, ${appt.appt_date} at ${time_str}.`,
+            link: '/dashboard#appointments'
+          }).save();
+          notificationCreated = true;
 
-          const mailOptions = {
-            from: senderEmail,
-            to: appt.patient_id.email,
-            subject: `Reminder: Tomorrow is your appointment with ${cleanDname}`,
-            text: `Hello ${appt.patient_id.full_name},\n\nThis is a reminder that you have a confirmed appointment scheduled for tomorrow:\n\nDoctor: ${cleanDname}\nDate: ${appt.appt_date} (Tomorrow)\nTime: ${time_str}\n\nPlease be ready and join via your dashboard on time.\n\nThank you,\nThe UltraCare Team`
-          };
+          if (appt.patient_id.email) {
+            const senderEmail = process.env.MAIL_USERNAME || 'ultracare02@gmail.com';
+            const mailOptions = {
+              from: senderEmail,
+              to: appt.patient_id.email,
+              subject: `Reminder: Tomorrow is your appointment with ${cleanDname}`,
+              text: `Hello ${appt.patient_id.full_name},\n\nThis is a reminder that you have a confirmed appointment scheduled for tomorrow:\n\nDoctor: ${cleanDname}\nDate: ${appt.appt_date} (Tomorrow)\nTime: ${time_str}\n\nPlease be ready and join via your dashboard on time.\n\nThank you,\nThe UltraCare Team`
+            };
 
-          await transporter.sendMail(mailOptions);
-          console.log(`[REMINDER-EMAIL] Sent to ${appt.patient_id.email}`);
+            try {
+              await transporter.sendMail(mailOptions);
+              console.log(`[REMINDER-EMAIL] Sent to ${appt.patient_id.email}`);
+            } catch (mailErr) {
+              console.error(`[REMINDER-ERROR] Failed to send email to ${appt.patient_id.email}: ${mailErr.message}`);
+              errors++;
+            }
+          }
 
           // Also send WhatsApp reminder if patient phone is available
           if (appt.patient_id.phone) {
@@ -60,9 +78,11 @@ router.all('/api/cron/send-reminders', async (req, res) => {
             }
           }
 
-          count++;
-        } catch (mailErr) {
-          console.error(`[REMINDER-ERROR] Failed to send email to ${appt.patient_id.email}: ${mailErr.message}`);
+          appt.appointment_reminder_sent_at = new Date();
+          await appt.save();
+          if (notificationCreated) count++;
+        } catch (reminderErr) {
+          console.error(`[REMINDER-ERROR] Failed to create appointment reminder for ${appt.patient_id.email || appt.patient_id._id}: ${reminderErr.message}`);
           errors++;
         }
       }

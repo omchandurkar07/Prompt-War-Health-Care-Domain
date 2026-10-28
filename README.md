@@ -6,14 +6,16 @@ Clinical and AI-assisted features are decision support only. They are not a diag
 
 ## Features
 
-- **Patients:** register and sign in, find doctors, book and manage appointments, pay confirmed appointments through Razorpay or the clearly labeled local demo-payment flow, track health, manage records and allergies, use family/vaccination tools, and view care plans and prescription history.
-- **Doctors:** manage profiles and appointments, review patient records, use the consultation room and queue, and create prescriptions by uploading a PDF/image for medicine extraction or adding medicine details manually.
+- **Patients:** register and sign in, find doctors, book instantly without waiting for doctor approval, request doctor-approved rescheduling, message their doctor on an appointment thread, pay immediately after booking through Razorpay or a clearly labeled local demo-payment flow, track health, manage records and allergies, use family/vaccination tools, and view care plans and prescription history.
+- **Doctors:** manage profiles and appointments, review and approve patient reschedule requests, reschedule failed-payment appointments with a patient message, review patient records, use the consultation room and queue, and create prescriptions by uploading a PDF/image for medicine extraction or adding medicine details manually.
 - **Administrators:** manage platform accounts and appointments and review eligible payment-refund requests.
-- **Shared workflows:** temporary health-record sharing, health passports, visit preparation, reminders, reports, and symptom assistance.
+- **Shared workflows:** temporary health-record sharing, patient-owned JSON health-record export, health passports, visit preparation, appointment and medicine reminders, reports, and symptom assistance.
+- **Accessibility and language:** persistent larger-text and high-contrast controls, a keyboard-accessible skip link and visible focus indicators. Patients can set a preferred language (English, Hindi, or Marathi) for AI-assisted prescription summaries; doctors can change the language per prescription. The rest of the interface is currently English.
+- **Doctor analytics:** monthly appointment/completion charts, ratings and revenue, plus cancellation, pending reschedule, and upcoming follow-up counts.
 
-Prescription scan extraction is a transcription aid: doctors must verify medicine names and instructions against the source before sharing. AI recovery guidance is informational and does not replace clinical judgment.
+Prescription scan extraction is a transcription aid: images are auto-oriented, enhanced, and supplied with detail crops to assist reading, but doctors must review the original scan and verify medicine names and instructions before sharing. AI confidence labels are estimates, not measured probabilities. Appointment messages are restricted to the patient and doctor associated with that appointment; they are not an emergency service. AI recovery guidance is informational and does not replace clinical judgment.
 
-Some workflows require external providers or configuration. Without Razorpay credentials, confirmed appointments can use the development-only payment simulation; it records a demo payment but does not charge money. Configure Razorpay test credentials to exercise the provider checkout. MongoDB is required for server startup. The optional Python ML helper requires the dependencies in `requirements.txt`.
+Some workflows require external providers or configuration. A booked appointment is confirmed immediately and patients are taken to checkout. Without Razorpay credentials, the development-only payment simulation lets the patient simulate either success or failure; it records no real charge. A failed payment notifies the doctor, who can offer a new slot and message the patient. Configure Razorpay test credentials to exercise provider checkout. MongoDB is required for server startup. The optional Python ML helper requires the dependencies in `requirements.txt`.
 
 ## Technology
 
@@ -71,8 +73,18 @@ The Python/Flask ML helper is optional. Its absence does not prevent the main we
 ### Phase 2 testing
 
 - Build the frontend with `npm run build --prefix client` and lint it with `npm run lint --prefix client`.
-- Test appointment payments after confirming an appointment as a doctor. With no Razorpay credentials, the patient dashboard offers a demo confirmation; no real charge is made. For provider checkout, configure Razorpay test credentials and follow [PAYMENTS_SETUP.md](PAYMENTS_SETUP.md).
+- Book an appointment as a patient and confirm checkout appears immediately without doctor approval. In demo mode, test both successful and failed payment; verify a failure notification appears for the doctor, reschedule the slot with a message, then verify the patient sees the new time/message and can retry payment. No real charge is made in demo mode. For provider checkout, configure Razorpay test credentials and follow [PAYMENTS_SETUP.md](PAYMENTS_SETUP.md).
 - Test prescriptions by uploading a PDF or image in the doctor's prescription form. Extracted medicine details appear for review, and additional medicines can be entered manually. Verify all extracted instructions against the original before saving.
+
+### Patient follow-up and records
+
+- Confirm an appointment as a doctor, then request a future date and available time from the patient dashboard. The original slot remains reserved until the doctor approves the request; an occupied or out-of-hours slot is rejected.
+- Use **Message doctor** or **Message patient** on an appointment to open the private follow-up thread. Only the appointment's patient and doctor can read or send messages; messages are limited to 2,000 characters.
+- Use **Export my records** in Health Locker to download the signed-in patient's record metadata and structured prescriptions as JSON. Uploaded file contents and file paths are deliberately not included in the export.
+- Appointment reminders are delivered in-app and, when configured, by email/WhatsApp the day before. Existing medicine reminders continue on their configured daily/weekly schedule. Scheduled reminder processing requires the application's cron routes to be invoked.
+- Toggle larger text and high contrast using the persistent accessibility controls at the bottom of the page. Keyboard users can tab to **Skip to main content**.
+- Set a preferred prescription summary language in the patient profile. This is a summary preference only; medicine instructions still need clinical review and the rest of the interface remains English.
+- Doctor analytics include cancellation/decline totals, pending reschedule requests, and follow-ups scheduled within the next 30 days.
 
 ### Gmail email setup
 

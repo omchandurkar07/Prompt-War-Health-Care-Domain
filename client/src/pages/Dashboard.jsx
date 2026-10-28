@@ -1,28 +1,18 @@
 import React, { useState, useEffect } from 'react';
 import { Link, useNavigate, useLocation } from 'react-router-dom';
-import { useAuth } from '../context/AuthContext';
 import axios from 'axios';
 import DoctorAvatar from '../components/DoctorAvatar';
-
-const loadRazorpay = () => new Promise((resolve) => {
-  if (window.Razorpay) return resolve(true);
-  const script = document.createElement('script');
-  script.src = 'https://checkout.razorpay.com/v1/checkout.js';
-  script.onload = () => resolve(true);
-  script.onerror = () => resolve(false);
-  document.body.appendChild(script);
-});
 
 const Dashboard = () => {
   const navigate = useNavigate();
   const location = useLocation();
-  const { user } = useAuth();
   const [data, setData] = useState(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
   const [checkedItems, setCheckedItems] = useState({});
   const [payments, setPayments] = useState([]);
-  const [paymentBusy, setPaymentBusy] = useState('');
+  const [rescheduleDraft, setRescheduleDraft] = useState(null);
+  const [rescheduleBusy, setRescheduleBusy] = useState(false);
 
   const fetchDashboardData = async () => {
     try {
@@ -116,73 +106,25 @@ const Dashboard = () => {
     }
   };
 
-  const handlePayAppointment = async (appt) => {
-    setPaymentBusy(appt._id);
+  const handleRescheduleRequest = async (event, appointmentId) => {
+    event.preventDefault();
+    if (!rescheduleDraft?.appt_date || !rescheduleDraft?.time_slot) return;
+    setRescheduleBusy(true);
     try {
-      const orderRes = await axios.post(`/api/payments/order/${appt._id}`);
-      if (!orderRes.data?.ok) throw new Error(orderRes.data?.error || 'Unable to start checkout.');
-
-      if (orderRes.data.payment_mode === 'simulation') {
-        const amount = (orderRes.data.amount / 100).toFixed(2);
-        const confirmed = window.confirm(
-          `DEMO PAYMENT ONLY\n\nThis simulates a payment of ₹${amount}. No real payment will be taken.\n\nContinue?`
-        );
-        if (!confirmed) {
-          setPaymentBusy('');
-          return;
-        }
-
-        const simulationRes = await axios.post(`/api/payments/simulate/${appt._id}`);
-        if (!simulationRes.data?.ok) {
-          throw new Error(simulationRes.data?.error || 'Unable to complete demo payment.');
-        }
-        alert(simulationRes.data.message || 'Demo payment recorded. No money was charged.');
-        await Promise.all([fetchDashboardData(), fetchPaymentHistory()]);
-        setPaymentBusy('');
-        return;
-      }
-
-      const loaded = await loadRazorpay();
-      if (!loaded) throw new Error('Razorpay Checkout could not be loaded. Check your connection and try again.');
-
-      const checkout = new window.Razorpay({
-        key: orderRes.data.key_id,
-        amount: orderRes.data.amount,
-        currency: orderRes.data.currency,
-        name: 'UltraCare',
-        description: `Consultation with Dr. ${appt.doctor_id?.full_name || 'your doctor'}`,
-        order_id: orderRes.data.order_id,
-        prefill: { name: user?.full_name || '', email: user?.email || '' },
-        notes: { appointment_id: appt._id },
-        theme: { color: '#0f766e' },
-        handler: async (gatewayResponse) => {
-          try {
-            const verifyRes = await axios.post(`/api/payments/verify/${appt._id}`, gatewayResponse);
-            if (!verifyRes.data?.ok) throw new Error(verifyRes.data?.error || 'Payment verification is pending.');
-            alert(verifyRes.data.status === 'paid'
-              ? 'Payment confirmed.'
-              : `Payment received. Current refund status: ${verifyRes.data.status}.`);
-            await Promise.all([fetchDashboardData(), fetchPaymentHistory()]);
-          } catch (verifyError) {
-            alert(verifyError.response?.data?.error || verifyError.message || 'Payment was received but confirmation is pending. Check payment history before retrying.');
-            fetchPaymentHistory();
-          } finally {
-            setPaymentBusy('');
-          }
-        },
-        modal: { ondismiss: () => setPaymentBusy('') }
-      });
-
-      checkout.on('payment.failed', (event) => {
-        setPaymentBusy('');
-        alert(event.error?.description || 'Payment was not completed. You can try again.');
-      });
-      checkout.open();
-    } catch (err) {
-      alert(err.response?.data?.error || err.message || 'Unable to start payment.');
-      setPaymentBusy('');
+      const response = await axios.post(`/api/appointment/${appointmentId}/reschedule`, rescheduleDraft);
+      if (!response.data?.ok) throw new Error(response.data?.error || 'Unable to send reschedule request.');
+      alert(response.data.message);
+      setRescheduleDraft(null);
+      await fetchDashboardData();
+    } catch (requestError) {
+      console.error(requestError);
+      alert(requestError.response?.data?.error || requestError.message || 'Unable to send reschedule request.');
+    } finally {
+      setRescheduleBusy(false);
     }
   };
+
+  const handlePayAppointment = (appt) => navigate(`/payment/${appt._id}`);
 
   if (loading) {
     return (
@@ -283,13 +225,12 @@ const Dashboard = () => {
                     </div>
 
                     <div style={{ display: 'flex', gap: '8px' }}>
-                      {appt.status === 'confirmed' && appt.payment_status !== 'completed' && appt.payment_status !== 'refunded' && (
+                      {appt.status === 'confirmed' && Number(appt.fee) > 0 && appt.payment_status !== 'completed' && appt.payment_status !== 'refunded' && (
                         <button
                           onClick={() => handlePayAppointment(appt)}
                           className="btn btn-primary btn-sm"
-                          disabled={paymentBusy === appt._id}
                         >
-                          {paymentBusy === appt._id ? 'Opening checkout...' : `Pay ₹${Number(appt.fee || 0).toFixed(2)}`}
+                          {appt.payment_status === 'failed' ? 'Retry payment' : `Pay ₹${Number(appt.fee || 0).toFixed(2)}`}
                         </button>
                       )}
                       {appt.payment_status === 'completed' && (
@@ -301,8 +242,70 @@ const Dashboard = () => {
                       {appt.status === 'confirmed' && (
                         <Link to={`/visit-prep/${appt._id}`} className="btn btn-outline btn-sm">📝 Prep Sheet</Link>
                       )}
+                      {['confirmed', 'completed'].includes(appt.status) && (
+                        <Link to={`/consultation/messages/${appt._id}`} className="btn btn-outline btn-sm">💬 Message doctor</Link>
+                      )}
+                      {appt.status === 'confirmed' && (
+                        <button
+                          type="button"
+                          className="btn btn-outline btn-sm"
+                          disabled={Boolean(appt.reschedule_request?.requested_at)}
+                          onClick={() => setRescheduleDraft(rescheduleDraft?.appointmentId === appt._id
+                            ? null
+                            : { appointmentId: appt._id, appt_date: '', time_slot: '' })}
+                        >
+                          {appt.reschedule_request?.requested_at
+                            ? 'Reschedule pending'
+                            : rescheduleDraft?.appointmentId === appt._id ? 'Close request' : 'Request reschedule'}
+                        </button>
+                      )}
                       <button onClick={() => handleCancelAppointment(appt._id)} className="btn btn-danger btn-sm" style={{ padding: '6px 10px' }}>Cancel</button>
                     </div>
+
+                    {appt.doctor_reschedule_message && (
+                      <p role="status" style={{ flexBasis: '100%', margin: 0, padding: '10px 12px', borderRadius: '8px', background: '#eff6ff', color: '#1e40af', fontSize: '0.84rem' }}>
+                        <strong>Doctor update:</strong> {appt.doctor_reschedule_message}
+                      </p>
+                    )}
+                    {appt.reschedule_request?.requested_at && (
+                      <p role="status" style={{ flexBasis: '100%', margin: 0, color: 'var(--text-muted)', fontSize: '0.82rem' }}>
+                        Reschedule requested: {appt.reschedule_request.appt_date} at {appt.reschedule_request.time_slot}. Your current slot remains active until the doctor responds.
+                      </p>
+                    )}
+                    {rescheduleDraft?.appointmentId === appt._id && (
+                      <form
+                        onSubmit={(event) => handleRescheduleRequest(event, appt._id)}
+                        style={{ flexBasis: '100%', display: 'flex', gap: '10px', alignItems: 'end', flexWrap: 'wrap' }}
+                      >
+                        <label style={{ fontSize: '0.8rem' }}>
+                          Preferred date
+                          <input
+                            type="date"
+                            required
+                            min={new Date(Date.now() + 86400000).toISOString().slice(0, 10)}
+                            value={rescheduleDraft.appt_date}
+                            onChange={(event) => setRescheduleDraft({ ...rescheduleDraft, appt_date: event.target.value })}
+                            className="form-control form-control-sm"
+                          />
+                        </label>
+                        <label style={{ fontSize: '0.8rem' }}>
+                          Preferred time
+                          <input
+                            type="time"
+                            required
+                            value={rescheduleDraft.time_slot}
+                            onChange={(event) => setRescheduleDraft({ ...rescheduleDraft, time_slot: event.target.value })}
+                            className="form-control form-control-sm"
+                          />
+                        </label>
+                        <button className="btn btn-primary btn-sm" disabled={rescheduleBusy}>
+                          {rescheduleBusy ? 'Sending...' : 'Send request'}
+                        </button>
+                        <span style={{ fontSize: '0.78rem', color: 'var(--text-muted)' }}>
+                          Your doctor must approve the requested slot.
+                        </span>
+                      </form>
+                    )}
                   </div>
                 ))}
               </div>
@@ -345,7 +348,11 @@ const Dashboard = () => {
               <p style={{ textAlign: 'center', padding: '20px', color: 'var(--text-muted)', fontSize: '0.9rem' }}>No past medical consultation records found.</p>
             ) : (
               <div style={{ maxHeight: '380px', overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: '10px', paddingRight: '4px' }}>
-                {past.map(appt => (
+                {past.map(appt => {
+                  const appointmentPrescription = data.prescriptions?.find(
+                    rx => String(rx.appointment_id?._id || rx.appointment_id) === String(appt._id)
+                  );
+                  return (
                   <div key={appt._id} style={{ padding: '12px', borderBottom: '1px solid var(--border)', display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: '10px' }}>
                     <div>
                       <h5 style={{ fontSize: '0.88rem', fontWeight: 700, margin: 0 }}>Dr. {appt.doctor_id?.full_name || 'Specialist'}</h5>
@@ -356,7 +363,16 @@ const Dashboard = () => {
                     <div style={{ display: 'flex', gap: '6px' }}>
                       {appt.status === 'completed' && (
                         <>
-                          <Link to={`/prescriptions/rx_${appt._id}`} className="btn btn-outline btn-sm" style={{ padding: '4px 10px', fontSize: '0.75rem' }}>RX Details</Link>
+                          {appointmentPrescription && (
+                            <Link
+                              to={`/prescriptions/${appointmentPrescription._id}`}
+                              className="btn btn-outline btn-sm"
+                              style={{ padding: '4px 10px', fontSize: '0.75rem' }}
+                            >
+                              RX Details
+                            </Link>
+                          )}
+                          <Link to={`/consultation/messages/${appt._id}`} className="btn btn-outline btn-sm" style={{ padding: '4px 10px', fontSize: '0.75rem' }}>💬 Message doctor</Link>
                           {!data.reviewed_appt_ids?.includes(appt._id) && (
                             <Link to={`/review/${appt._id}`} className="btn btn-primary btn-sm" style={{ padding: '4px 10px', fontSize: '0.75rem' }}>⭐ Rate</Link>
                           )}
@@ -364,7 +380,8 @@ const Dashboard = () => {
                       )}
                     </div>
                   </div>
-                ))}
+                  );
+                })}
               </div>
             )}
           </div>

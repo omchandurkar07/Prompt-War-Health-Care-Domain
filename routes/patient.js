@@ -238,6 +238,7 @@ router.get('/profile', patientRequired, async (req, res) => {
 router.post('/profile', patientRequired, upload.single('profile_image'), async (req, res) => {
   const pid = req.session.patient_id;
   const { full_name, phone, dob, gender, blood_group, address, emergency_contact } = req.body;
+  const allowedLanguages = ['English', 'Hindi', 'Marathi'];
 
   try {
     const updateData = {
@@ -249,6 +250,12 @@ router.post('/profile', patientRequired, upload.single('profile_image'), async (
       address,
       emergency_contact
     };
+    if (req.body.preferred_language !== undefined) {
+      if (!allowedLanguages.includes(req.body.preferred_language)) {
+        return res.status(400).json({ ok: false, error: 'Choose a supported prescription summary language.' });
+      }
+      updateData.preferred_language = req.body.preferred_language;
+    }
 
     if (req.file) {
       updateData.profile_image = `/static/uploads/${req.file.filename}`;
@@ -513,8 +520,37 @@ router.post('/book/:did', patientRequired, async (req, res) => {
       return res.status(404).json({ ok: false, error: 'Doctor not found.' });
     }
 
-    if (!appt_date || !time_slot) {
-      return res.json({ ok: false, error: 'Please select date and time.' });
+    if (typeof appt_date !== 'string' || !/^\d{4}-\d{2}-\d{2}$/.test(appt_date) ||
+        typeof time_slot !== 'string' || !/^\d{2}:\d{2}$/.test(time_slot)) {
+      return res.status(400).json({ ok: false, error: 'Choose a valid date and time.' });
+    }
+
+    if (appt_type && !['normal', 'emergency', 'home_visit', 'video'].includes(appt_type)) {
+      return res.status(400).json({ ok: false, error: 'Choose a valid appointment type.' });
+    }
+
+    const appointmentDate = new Date(`${appt_date}T00:00:00.000Z`);
+    const now = new Date();
+    const today = new Date(now);
+    today.setUTCHours(0, 0, 0, 0);
+    if (Number.isNaN(appointmentDate.getTime()) ||
+        appointmentDate.toISOString().slice(0, 10) !== appt_date ||
+        appointmentDate < today ||
+        (appt_date === now.toISOString().slice(0, 10) && time_slot <= now.toISOString().slice(11, 16))) {
+      return res.status(400).json({ ok: false, error: 'Choose a future appointment date and time.' });
+    }
+
+    const dateDay = appointmentDate.toLocaleDateString('en-US', { weekday: 'short', timeZone: 'UTC' });
+    const availableDays = (doctor.available_days || '').split(',').map(day => day.trim());
+    const availableSlots = generateSlots(
+      doctor.slot_start,
+      doctor.slot_end,
+      doctor.slot_duration,
+      doctor.break_start,
+      doctor.break_end
+    );
+    if (!availableDays.includes(dateDay) || !availableSlots.includes(time_slot)) {
+      return res.status(400).json({ ok: false, error: 'That date or time is outside the doctor’s availability.' });
     }
 
     const clash = await Appointment.findOne({
@@ -525,7 +561,7 @@ router.post('/book/:did', patientRequired, async (req, res) => {
     });
 
     if (clash) {
-      return res.json({ ok: false, error: 'Slot already booked. Choose another.' });
+      return res.status(409).json({ ok: false, error: 'Slot already booked. Choose another.' });
     }
 
     if (appt_type === 'home_visit' && !doctor.home_visit_available) {
@@ -547,7 +583,7 @@ router.post('/book/:did', patientRequired, async (req, res) => {
       home_address: req.body.home_address || '',
       reason: reason || '',
       fee: homeFee,
-      status: 'pending'
+      status: 'confirmed'
     });
     await appt.save();
 
@@ -555,8 +591,8 @@ router.post('/book/:did', patientRequired, async (req, res) => {
     const newNotif = new Notification({
       user_id: did,
       user_type: 'doctor',
-      title: `${appt_type === 'emergency' ? '🚨 Emergency' : '📅 New'} Appointment Request`,
-      message: `${pname} requested an appointment on ${appt_date} at ${time_slot}.`,
+      title: `${appt_type === 'emergency' ? '🚨 Emergency' : '📅 New'} Appointment Booked`,
+      message: `${pname} booked an appointment on ${appt_date} at ${time_slot}. Payment is ${homeFee > 0 ? 'pending' : 'not required'}.`,
       link: '/doctor/appointments'
     });
     await newNotif.save();
@@ -565,13 +601,93 @@ router.post('/book/:did', patientRequired, async (req, res) => {
 
     const patient = await Patient.findById(req.session.patient_id);
     if (patient && patient.email) {
-      await sendAppointmentBookingEmail(patient.email, doctor.full_name, appt_date, time_slot);
+      await sendAppointmentBookingEmail(patient.email, doctor.full_name, appt_date, time_slot, homeFee > 0);
     }
 
-    res.json({ ok: true, message: 'Appointment booked! Waiting for doctor confirmation.', appointment_id: appt._id });
+    res.json({
+      ok: true,
+      message: homeFee > 0
+        ? 'Appointment booked. Complete payment to finalize your booking.'
+        : 'Appointment booked successfully.',
+      appointment_id: appt._id,
+      payment_required: homeFee > 0
+    });
   } catch (error) {
     console.error(error);
     res.status(500).json({ ok: false, error: 'Error booking appointment.' });
+  }
+});
+
+router.post('/appointment/:aid/reschedule', patientRequired, async (req, res) => {
+  const { aid } = req.params;
+  const { appt_date, time_slot } = req.body;
+  const patientId = req.session.patient_id;
+
+  if (!aid.match(/^[0-9a-fA-F]{24}$/) || typeof appt_date !== 'string' ||
+      !/^\d{4}-\d{2}-\d{2}$/.test(appt_date) || typeof time_slot !== 'string' ||
+      !/^\d{2}:\d{2}$/.test(time_slot)) {
+    return res.status(400).json({ ok: false, error: 'Choose a valid date and time.' });
+  }
+
+  try {
+    const appointment = await Appointment.findOne({
+      _id: aid,
+      patient_id: patientId,
+      status: 'confirmed'
+    }).populate('doctor_id');
+    if (!appointment) {
+      return res.status(404).json({ ok: false, error: 'Confirmed appointment not found.' });
+    }
+    if (appointment.reschedule_request?.requested_at) {
+      return res.status(409).json({ ok: false, error: 'A reschedule request is already awaiting review.' });
+    }
+    if (appt_date === appointment.appt_date && time_slot === appointment.time_slot) {
+      return res.status(400).json({ ok: false, error: 'Choose a different date or time from your current appointment.' });
+    }
+
+    const selectedDate = new Date(`${appt_date}T00:00:00.000Z`);
+    const today = new Date();
+    today.setUTCHours(0, 0, 0, 0);
+    if (Number.isNaN(selectedDate.getTime()) || selectedDate.toISOString().slice(0, 10) !== appt_date || selectedDate <= today) {
+      return res.status(400).json({ ok: false, error: 'Choose a future appointment date.' });
+    }
+
+    const doctor = appointment.doctor_id;
+    if (!doctor) {
+      return res.status(409).json({ ok: false, error: 'The doctor is no longer available for rescheduling.' });
+    }
+    const dateDay = new Date(`${appt_date}T00:00:00.000Z`)
+      .toLocaleDateString('en-US', { weekday: 'short', timeZone: 'UTC' });
+    const availableDays = (doctor.available_days || '').split(',').map(day => day.trim());
+    const slots = generateSlots(doctor.slot_start, doctor.slot_end, doctor.slot_duration, doctor.break_start, doctor.break_end);
+    if (!availableDays.includes(dateDay) || !slots.includes(time_slot)) {
+      return res.status(400).json({ ok: false, error: 'That date or time is outside the doctor’s availability.' });
+    }
+
+    const conflict = await Appointment.exists({
+      doctor_id: doctor._id,
+      appt_date,
+      time_slot,
+      status: { $in: ['pending', 'confirmed'] },
+      _id: { $ne: appointment._id }
+    });
+    if (conflict) {
+      return res.status(409).json({ ok: false, error: 'That appointment slot is already booked.' });
+    }
+
+    appointment.reschedule_request = { appt_date, time_slot, requested_at: new Date() };
+    await appointment.save();
+    await new Notification({
+      user_id: doctor._id,
+      user_type: 'doctor',
+      title: 'Appointment reschedule requested',
+      message: `A patient requested ${appt_date} at ${time_slot}.`,
+      link: '/doctor/appointments'
+    }).save();
+    res.json({ ok: true, message: 'Reschedule request sent to your doctor.' });
+  } catch (error) {
+    console.error(error);
+    res.status(500).json({ ok: false, error: 'Unable to send reschedule request.' });
   }
 });
 

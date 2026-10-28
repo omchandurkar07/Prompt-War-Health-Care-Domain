@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect, useRef, useCallback } from 'react';
 import axios from 'axios';
 import { useParams, useNavigate, useLocation } from 'react-router-dom';
 import { useAuth } from '../context/AuthContext';
@@ -8,6 +8,7 @@ const ConsultationRoom = () => {
   const navigate = useNavigate();
   const { pathname } = useLocation();
   const isVideo = pathname.includes('/video/');
+  const isFollowup = pathname.includes('/messages/');
   const { user, role } = useAuth();
 
   const [appt, setAppt] = useState(null);
@@ -25,10 +26,23 @@ const ConsultationRoom = () => {
   const [cameraActive, setCameraActive] = useState(true);
   const [micActive, setMicActive] = useState(true);
 
-  const fetchRoomData = async () => {
+  const fetchChatHistory = useCallback(async () => {
     try {
-      const mode = isVideo ? 'video' : 'chat';
-      const res = await axios.get(`/api/consultation/${mode}/${aid}`);
+      const res = await axios.get(`/api/api/chat/history/${aid}`);
+      if (res.data && res.data.messages) {
+        setMessages(res.data.messages);
+      }
+    } catch (err) {
+      console.error('Failed to load chat history', err);
+    }
+  }, [aid]);
+
+  const fetchRoomData = useCallback(async () => {
+    try {
+      const endpoint = isFollowup
+        ? `/api/consultation/messages/${aid}`
+        : `/api/consultation/${isVideo ? 'video' : 'chat'}/${aid}`;
+      const res = await axios.get(endpoint);
       if (res.data && res.data.ok) {
         setAppt(res.data.appt);
         fetchChatHistory();
@@ -43,25 +57,14 @@ const ConsultationRoom = () => {
     } finally {
       setLoading(false);
     }
-  };
-
-  const fetchChatHistory = async () => {
-    try {
-      const res = await axios.get(`/api/api/chat/history/${aid}`);
-      if (res.data && res.data.messages) {
-        setMessages(res.data.messages);
-      }
-    } catch (err) {
-      console.error('Failed to load chat history', err);
-    }
-  };
+  }, [aid, fetchChatHistory, isFollowup, isVideo]);
 
   useEffect(() => {
     fetchRoomData();
     return () => {
       if (chatPollRef.current) clearInterval(chatPollRef.current);
     };
-  }, [aid, isVideo]);
+  }, [fetchRoomData]);
 
   // Scroll to bottom of chat
   useEffect(() => {
@@ -134,9 +137,11 @@ const ConsultationRoom = () => {
           <span style={{ fontSize: '0.68rem', background: '#fee2e2', color: '#b91c1c', fontWeight: 800, padding: '3px 8px', borderRadius: '6px' }}>🚨 LIVE CLINICAL ROOM</span>
           <h2 style={{ fontSize: '1.25rem', fontWeight: 800, margin: '4px 0 0' }}>Consultation Room</h2>
         </div>
-        <button onClick={handleEndSession} className="btn btn-danger btn-sm" style={{ background: '#ef4444' }}>
-          🛑 End Consultation Session
-        </button>
+        {!isFollowup && (
+          <button onClick={handleEndSession} className="btn btn-danger btn-sm" style={{ background: '#ef4444' }}>
+            🛑 End Consultation Session
+          </button>
+        )}
       </div>
 
       <div className="row g-4">
@@ -146,8 +151,12 @@ const ConsultationRoom = () => {
             
             {/* Chat header */}
             <div style={{ borderBottom: '1px solid var(--border)', paddingBottom: '10px', marginBottom: '10px' }}>
-              <h4 style={{ fontSize: '0.9rem', fontWeight: 800, margin: 0 }}>💬 Live Practitioner Consultation Chat</h4>
-              <span style={{ fontSize: '0.72rem', color: 'var(--text-muted)' }}>Messages are secured and logged in telemetry databases</span>
+              <h4 style={{ fontSize: '0.9rem', fontWeight: 800, margin: 0 }}>
+                {isFollowup ? '💬 Appointment follow-up messages' : '💬 Live Practitioner Consultation Chat'}
+              </h4>
+              <span style={{ fontSize: '0.72rem', color: 'var(--text-muted)' }}>
+                Only the patient and doctor on this appointment can view these messages. For urgent symptoms, contact emergency services.
+              </span>
             </div>
 
             {/* Chat Feed list */}
@@ -197,10 +206,11 @@ const ConsultationRoom = () => {
                 className="form-control form-control-sm"
                 value={typedMessage}
                 onChange={(e) => setTypedMessage(e.target.value)}
+                maxLength={2000}
                 disabled={chatLoading}
                 required
               />
-              <button type="submit" disabled={chatLoading} className="btn btn-primary btn-sm">Send</button>
+              <button type="submit" disabled={chatLoading || !typedMessage.trim()} className="btn btn-primary btn-sm">Send</button>
             </form>
 
           </div>

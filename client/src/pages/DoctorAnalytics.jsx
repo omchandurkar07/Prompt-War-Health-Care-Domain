@@ -46,7 +46,15 @@ const DoctorAnalytics = () => {
     );
   }
 
-  const { doctor = {}, monthly = [], rating_dist = [], total_revenue = 0 } = data || {};
+  const {
+    doctor = {},
+    monthly = [],
+    rating_dist = [],
+    total_revenue = 0,
+    cancelled_appointments = 0,
+    pending_reschedules = 0,
+    scheduled_followups = 0
+  } = data || {};
 
   return (
     <>
@@ -92,6 +100,21 @@ const DoctorAnalytics = () => {
                 <div style={{ fontSize: '1.4rem', fontWeight: 800, color: '#7c3aed', lineHeight: 1.2 }}>{Math.round(doctor.response_time_avg || 0)} min</div>
                 <div style={{ fontSize: '0.75rem', color: 'var(--text-muted)', fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.05em', marginTop: '2px' }}>Avg Response</div>
               </div>
+            </div>
+          </div>
+
+          <div className="stats-row" style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(220px, 1fr))', gap: '20px', marginBottom: '32px' }}>
+            <div className="glass" style={{ padding: '18px', borderRadius: '12px' }}>
+              <strong style={{ display: 'block', fontSize: '1.4rem' }}>{cancelled_appointments}</strong>
+              <span style={{ color: 'var(--text-muted)', fontSize: '0.82rem' }}>Cancelled or declined appointments</span>
+            </div>
+            <div className="glass" style={{ padding: '18px', borderRadius: '12px' }}>
+              <strong style={{ display: 'block', fontSize: '1.4rem' }}>{pending_reschedules}</strong>
+              <span style={{ color: 'var(--text-muted)', fontSize: '0.82rem' }}>Reschedule requests awaiting review</span>
+            </div>
+            <div className="glass" style={{ padding: '18px', borderRadius: '12px' }}>
+              <strong style={{ display: 'block', fontSize: '1.4rem' }}>{scheduled_followups}</strong>
+              <span style={{ color: 'var(--text-muted)', fontSize: '0.82rem' }}>Follow-ups scheduled in the next 30 days</span>
             </div>
           </div>
 

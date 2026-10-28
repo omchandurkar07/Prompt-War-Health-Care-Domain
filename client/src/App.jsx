@@ -1,4 +1,4 @@
-import React from 'react';
+import React, { useEffect, useState } from 'react';
 import { BrowserRouter as Router, Routes, Route, Navigate } from 'react-router-dom';
 import { AuthProvider } from './context/AuthContext';
 import ProtectedRoute from './components/ProtectedRoute';
@@ -10,6 +10,7 @@ import Home from './pages/Home';
 import Login from './pages/Login';
 import Register from './pages/Register';
 import Dashboard from './pages/Dashboard';
+import AppointmentPayment from './pages/AppointmentPayment';
 import DoctorDashboard from './pages/DoctorDashboard';
 import PatientProfile from './pages/PatientProfile';
 import DoctorProfile from './pages/DoctorProfile';
@@ -41,14 +42,39 @@ import DoctorPatientRecords from './pages/DoctorPatientRecords';
 import DoctorAnalytics from './pages/DoctorAnalytics';
 import AdminDashboard from './pages/AdminDashboard';
 
+function AccessibilityControls() {
+  const [largeText, setLargeText] = useState(() => localStorage.getItem('accessibility-large-text') === 'true');
+  const [highContrast, setHighContrast] = useState(() => localStorage.getItem('accessibility-high-contrast') === 'true');
+
+  useEffect(() => {
+    document.documentElement.classList.toggle('accessibility-large-text', largeText);
+    document.documentElement.classList.toggle('accessibility-high-contrast', highContrast);
+    localStorage.setItem('accessibility-large-text', String(largeText));
+    localStorage.setItem('accessibility-high-contrast', String(highContrast));
+  }, [largeText, highContrast]);
+
+  return (
+    <aside className="accessibility-controls" aria-label="Accessibility settings">
+      <button type="button" aria-pressed={largeText} onClick={() => setLargeText(value => !value)}>
+        {largeText ? 'Normal text' : 'Larger text'}
+      </button>
+      <button type="button" aria-pressed={highContrast} onClick={() => setHighContrast(value => !value)}>
+        {highContrast ? 'Standard contrast' : 'High contrast'}
+      </button>
+    </aside>
+  );
+}
+
 function App() {
   return (
     <Router>
       <AuthProvider>
         <div style={{ display: 'flex', flexDirection: 'column', minHeight: '100vh' }}>
+          <a className="skip-link" href="#main-content">Skip to main content</a>
           <Navbar />
+          <AccessibilityControls />
           
-          <main style={{ flex: '1 0 auto' }}>
+          <main id="main-content" tabIndex="-1" style={{ flex: '1 0 auto' }}>
             <Routes>
               {/* Public Routes */}
               <Route path="/" element={<Home />} />
@@ -65,6 +91,14 @@ function App() {
                     <Dashboard />
                   </ProtectedRoute>
                 } 
+              />
+              <Route
+                path="/payment/:aid"
+                element={
+                  <ProtectedRoute allowedRoles={['patient']}>
+                    <AppointmentPayment />
+                  </ProtectedRoute>
+                }
               />
               <Route
                 path="/my-prescriptions"
@@ -294,6 +328,14 @@ function App() {
                     <ConsultationRoom />
                   </ProtectedRoute>
                 } 
+              />
+              <Route
+                path="/consultation/messages/:aid"
+                element={
+                  <ProtectedRoute allowedRoles={['patient', 'doctor']}>
+                    <ConsultationRoom />
+                  </ProtectedRoute>
+                }
               />
               <Route 
                 path="/consultation/video/:aid" 

@@ -303,6 +303,30 @@ router.get('/consultation/chat/:aid', async (req, res) => {
   }
 });
 
+// GET /consultation/messages/:aid
+router.get('/consultation/messages/:aid', async (req, res) => {
+  const { aid } = req.params;
+  if (!req.session.patient_id && !req.session.doctor_id) {
+    return res.status(401).json({ ok: false, error: 'Please log in to view this conversation.' });
+  }
+
+  try {
+    const appt = await getAppointmentForUser(req, aid);
+    if (!appt || !['confirmed', 'completed'].includes(appt.status)) {
+      return res.status(403).json({ ok: false, error: 'This appointment conversation is not available.' });
+    }
+
+    res.json({
+      ok: true,
+      appt,
+      doctor_name: appt.doctor_id?.full_name || 'Doctor'
+    });
+  } catch (error) {
+    console.error(error);
+    res.status(500).json({ ok: false, error: 'Unable to load appointment conversation.' });
+  }
+});
+
 // GET /consultation/complete/:aid
 router.get('/consultation/complete/:aid', async (req, res) => {
   const { aid } = req.params;
@@ -358,7 +382,7 @@ router.get('/api/chat/history/:aid', async (req, res) => {
 
   try {
     const appt = await getAppointmentForUser(req, aid);
-    if (!appt) {
+    if (!appt || !['pending', 'confirmed', 'completed'].includes(appt.status)) {
       return res.status(403).json({ error: 'Unauthorized' });
     }
 
@@ -409,19 +433,19 @@ router.get('/api/chat/history/:aid', async (req, res) => {
 // POST /api/chat/send/:aid
 router.post('/api/chat/send/:aid', async (req, res) => {
   const { aid } = req.params;
-  const messageText = (req.body.message || '').trim();
+  const messageText = typeof req.body.message === 'string' ? req.body.message.trim() : '';
 
   if (!req.session.patient_id && !req.session.doctor_id) {
     return res.status(403).json({ error: 'Unauthorized' });
   }
 
-  if (!messageText) {
-    return res.status(400).json({ error: 'Empty message' });
+  if (!messageText || messageText.length > 2000) {
+    return res.status(400).json({ error: 'Messages must contain 1 to 2000 characters.' });
   }
 
   try {
     const appt = await getAppointmentForUser(req, aid);
-    if (!appt) {
+    if (!appt || !['pending', 'confirmed', 'completed'].includes(appt.status)) {
       return res.status(403).json({ error: 'Unauthorized' });
     }
 
@@ -441,6 +465,16 @@ router.post('/api/chat/send/:aid', async (req, res) => {
       message: messageText
     });
     await newMessage.save();
+
+    const recipientId = req.session.role === 'patient' ? appt.doctor_id._id : appt.patient_id;
+    const recipientType = req.session.role === 'patient' ? 'doctor' : 'patient';
+    await new Notification({
+      user_id: recipientId,
+      user_type: recipientType,
+      title: 'New appointment message',
+      message: `New message about your appointment on ${appt.appt_date}.`,
+      link: `/consultation/messages/${aid}`
+    }).save();
 
     res.json({ ok: true });
   } catch (error) {

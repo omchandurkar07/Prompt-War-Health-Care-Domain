@@ -10,6 +10,7 @@ const PatientSchema = new mongoose.Schema({
   blood_group: { type: String },
   address: { type: String },
   emergency_contact: { type: String },
+  preferred_language: { type: String, enum: ['English', 'Hindi', 'Marathi'], default: 'English' },
   profile_image: { type: String },
   chronic_conditions: { type: String, default: '' },
   is_verified: { type: Boolean, default: false },

@@ -13,7 +13,8 @@ const PatientProfile = () => {
     gender: 'Male',
     blood_group: 'A+',
     address: '',
-    emergency_contact: ''
+    emergency_contact: '',
+    preferred_language: 'English'
   });
   const [file, setFile] = useState(null);
   const [previewUrl, setPreviewUrl] = useState('');
@@ -33,7 +34,8 @@ const PatientProfile = () => {
           gender: p.gender || 'Male',
           blood_group: p.blood_group || 'A+',
           address: p.address || '',
-          emergency_contact: p.emergency_contact || ''
+          emergency_contact: p.emergency_contact || '',
+          preferred_language: p.preferred_language || 'English'
         });
         setCurrentImage(p.profile_image || '');
       } else {
@@ -81,6 +83,7 @@ const PatientProfile = () => {
     formData.append('blood_group', profileForm.blood_group);
     formData.append('address', profileForm.address);
     formData.append('emergency_contact', profileForm.emergency_contact);
+    formData.append('preferred_language', profileForm.preferred_language);
 
     try {
       const res = await axios.post('/api/profile', formData, {
@@ -222,6 +225,25 @@ const PatientProfile = () => {
                 </select>
               </div>
             </div>
+          </div>
+
+          <div className="form-group">
+            <label className="form-label" htmlFor="preferred-language" style={{ fontSize: '0.78rem', fontWeight: 600 }}>
+              Preferred prescription summary language
+            </label>
+            <select
+              id="preferred-language"
+              className="form-control form-control-sm"
+              value={profileForm.preferred_language}
+              onChange={(e) => setProfileForm({ ...profileForm, preferred_language: e.target.value })}
+            >
+              <option value="English">English</option>
+              <option value="Hindi">Hindi</option>
+              <option value="Marathi">Marathi</option>
+            </select>
+            <small style={{ color: 'var(--text-muted)' }}>
+              This preference suggests the language for AI-assisted summaries; your doctor can change it.
+            </small>
           </div>
 
           <div className="form-group">

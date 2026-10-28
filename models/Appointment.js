@@ -22,7 +22,14 @@ const AppointmentSchema = new mongoose.Schema({
   session_start_time: { type: String },
   session_end_time: { type: String },
   consultation_duration: { type: Number, default: 0 },
-  payment_status: { type: String, default: 'pending' }
+  payment_status: { type: String, default: 'pending' },
+  reschedule_request: {
+    appt_date: { type: String },
+    time_slot: { type: String },
+    requested_at: { type: Date }
+  },
+  appointment_reminder_sent_at: { type: Date },
+  doctor_reschedule_message: { type: String, default: '' }
 });
 
 module.exports = mongoose.model('Appointment', AppointmentSchema);
