@@ -1,0 +1,7 @@
+services:
+  - type: web
+    name: prompt-war-health-care-domain
+    runtime: node
+    buildCommand: npm ci && npm ci --prefix client && npm run build --prefix client
+    startCommand: npm start
+    healthCheckPath: /health
