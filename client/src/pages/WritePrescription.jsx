@@ -16,18 +16,30 @@ const WritePrescription = () => {
   const [followUpDate, setFollowUpDate] = useState('');
   const [preferredLanguage, setPreferredLanguage] = useState('English');
   const [selectedFile, setSelectedFile] = useState(null);
+  const [selectedImagePreview, setSelectedImagePreview] = useState('');
   const [fileError, setFileError] = useState('');
   const [isDraggingFile, setIsDraggingFile] = useState(false);
   const [ocrText, setOcrText] = useState('');
   const [showOcrPreview, setShowOcrPreview] = useState(false);
   const [ocrLoading, setOcrLoading] = useState(false);
+  const [extractionNotice, setExtractionNotice] = useState('');
   
   // Medicines List
-  const [medicines, setMedicines] = useState([{ name: '', dosage: '', timing: '', duration: '' }]);
+  const [medicines, setMedicines] = useState([]);
   
   // Submission UI States
   const [submitLoading, setSubmitLoading] = useState(false);
-  const [cdsWarnings, setCdsWarnings] = useState([]);
+
+  useEffect(() => {
+    if (!selectedFile || !selectedFile.type.startsWith('image/')) {
+      setSelectedImagePreview('');
+      return undefined;
+    }
+
+    const previewUrl = URL.createObjectURL(selectedFile);
+    setSelectedImagePreview(previewUrl);
+    return () => URL.revokeObjectURL(previewUrl);
+  }, [selectedFile]);
   
   const fetchPrescriptionDetails = async () => {
     try {
@@ -59,17 +71,29 @@ const WritePrescription = () => {
   }, [aid]);
 
   const addMedicineRow = () => {
-    setMedicines([...medicines, { name: '', dosage: '', timing: '', duration: '' }]);
+    setMedicines(prev => [...prev, {
+      name: '',
+      dosage: '',
+      units_per_dose: '',
+      timing: '',
+      duration: '',
+      quantity: '',
+      quantity_source: 'not_specified',
+      confidence: 'low',
+      source: 'manual',
+      route: 'Oral',
+      instructions: ''
+    }]);
   };
 
-  const removeMedicineRow = (idx) => {
-    if (medicines.length > 1) {
-      setMedicines(medicines.filter((_, i) => i !== idx));
-    }
+  const removeMedicineRow = (indexToRemove) => {
+    setMedicines(prev => prev.filter((_, index) => index !== indexToRemove));
   };
 
-  const updateMedicineField = (idx, field, val) => {
-    setMedicines(prev => prev.map((med, i) => i === idx ? { ...med, [field]: val } : med));
+  const updateMedicineField = (indexToUpdate, field, value) => {
+    setMedicines(prev => prev.map((medicine, index) => (
+      index === indexToUpdate ? { ...medicine, [field]: value } : medicine
+    )));
   };
 
   const handleFileSelection = (file) => {
@@ -93,6 +117,8 @@ const WritePrescription = () => {
     setSelectedFile(file);
     setShowOcrPreview(false);
     setOcrText('');
+    setExtractionNotice('Prescription scan uploaded. Extracting medicine details...');
+    handleOcrScan(file);
   };
 
   const handleFileChange = (e) => {
@@ -106,50 +132,58 @@ const WritePrescription = () => {
     handleFileSelection(e.dataTransfer.files?.[0]);
   };
 
-  const handleOcrScan = async () => {
-    if (!selectedFile) {
-      alert('Please upload a prescription image scan first.');
+  const handleOcrScan = async (fileToScan = selectedFile) => {
+    if (!fileToScan) {
       return;
     }
     setOcrLoading(true);
     const formData = new FormData();
-    formData.append('file', selectedFile);
+    formData.append('file', fileToScan);
     
     try {
-      const res = await axios.post('/api/prescription/ocr', formData, {
-        headers: {
-          'Content-Type': 'multipart/form-data'
-        }
+      const response = await fetch('/api/prescription/ocr', {
+        method: 'POST',
+        body: formData,
+        credentials: 'include'
       });
-      if (res.data && res.data.ok) {
-        if (res.data.medicines && res.data.medicines.length > 0) {
-          setMedicines(res.data.medicines.map(m => ({
+      const result = await response.json();
+      if (!response.ok || !result.ok) {
+        throw new Error(result.error || 'Unable to analyze this prescription scan.');
+      }
+
+      if (result.medicines && result.medicines.length > 0) {
+        setMedicines(result.medicines.map(m => ({
             name: m.name || '',
             dosage: m.dosage || '',
+            units_per_dose: m.units_per_dose || '',
             timing: m.timing || m.frequency || '',
-            duration: m.duration || ''
+            duration: m.duration || '',
+            quantity: m.quantity || '',
+            quantity_source: m.quantity_source || (m.quantity ? 'written' : 'not_specified'),
+            confidence: m.confidence || 'low',
+            route: m.route || '',
+            instructions: m.instructions || ''
           })));
-        }
-        if (res.data.diagnosis) {
-          setDiagnosis(res.data.diagnosis);
-        }
-        if (res.data.follow_up_date) {
-          setFollowUpDate(res.data.follow_up_date);
-        }
-        if (res.data.doctor_notes) {
-          setDoctorNotes(res.data.doctor_notes);
-        }
-        if (res.data.raw_text) {
-          setOcrText(res.data.raw_text);
-          setShowOcrPreview(true);
-        }
-        alert(res.data.medicines?.length ? 'Prescription details auto-filled from AI OCR scan!' : 'OCR scan complete — please enter details manually.');
+        setExtractionNotice('Detected details are suggestions. Verify the medicine, dose, schedule, duration, and quantity against the uploaded prescription before saving.');
       } else {
-        alert(res.data.error || 'Failed to scan prescription.');
+        setExtractionNotice('The scan could not reliably identify any medicines. Check the original scan or upload a clearer image before saving.');
+      }
+      if (result.diagnosis) {
+        setDiagnosis(result.diagnosis);
+      }
+      if (result.follow_up_date) {
+        setFollowUpDate(result.follow_up_date);
+      }
+      if (result.doctor_notes) {
+        setDoctorNotes(result.doctor_notes);
+      }
+      if (result.raw_text) {
+        setOcrText(result.raw_text);
+        setShowOcrPreview(true);
       }
     } catch (err) {
       console.error(err);
-      alert(err.response?.data?.error || 'Server error running prescription OCR scan.');
+      setExtractionNotice(err.message || 'Unable to analyze this scan. Try uploading a clearer prescription image.');
     } finally {
       setOcrLoading(false);
     }
@@ -164,7 +198,7 @@ const WritePrescription = () => {
       return;
     }
     if (!selectedFile && !hasMeds) {
-      alert('Please add at least one medicine or upload a prescription scan.');
+      alert('Upload a prescription scan so its medicine details can be detected.');
       return;
     }
 
@@ -184,34 +218,38 @@ const WritePrescription = () => {
       formData.append(`medicine_name[${index}]`, med.name);
       formData.append(`med_dosage[${index}]`, med.dosage);
       formData.append(`medicine_dosage[${index}]`, med.dosage);
+      formData.append(`medicine_units_per_dose[${index}]`, med.units_per_dose || '');
       formData.append(`med_frequency[${index}]`, med.timing);
       formData.append(`medicine_timing[${index}]`, med.timing);
       formData.append(`med_duration[${index}]`, med.duration);
       formData.append(`medicine_duration[${index}]`, med.duration);
+      formData.append(`med_quantity[${index}]`, med.quantity || '');
+      formData.append(`medicine_quantity[${index}]`, med.quantity || '');
+      formData.append(`medicine_quantity_source[${index}]`, med.quantity_source || '');
       formData.append(`med_route[${index}]`, 'Oral');
       formData.append(`med_instructions[${index}]`, '');
     });
 
     try {
-      const res = await axios.post(`/api/doctor/prescription/${aid}`, formData, {
-        headers: {
-          'Content-Type': 'multipart/form-data'
-        }
+      const response = await fetch(`/api/doctor/prescription/${aid}`, {
+        method: 'POST',
+        body: formData,
+        credentials: 'include'
       });
-      if (res.data && res.data.ok) {
-        if (res.data.warnings && res.data.warnings.length > 0) {
-          setCdsWarnings(res.data.warnings);
-          alert('Prescription saved! Warnings detected by Clinical Decision Support (CDS): \n' + res.data.warnings.join('\n'));
+      const result = await response.json();
+      if (response.ok && result.ok) {
+        if (result.warnings && result.warnings.length > 0) {
+          alert('Prescription saved! Warnings detected by Clinical Decision Support (CDS): \n' + result.warnings.join('\n'));
         } else {
-          alert('Prescription successfully saved and sent to patient!');
+          alert(result.message || 'Prescription saved and made available in the patient dashboard.');
         }
         navigate('/doctor/dashboard');
       } else {
-        alert(res.data.error || 'Failed to submit prescription.');
+        alert(result.error || 'Failed to submit prescription.');
       }
     } catch (err) {
       console.error(err);
-      alert(err.response?.data?.error || 'Server error submitting prescription details.');
+      alert(err.message || 'Server error submitting prescription details.');
     } finally {
       setSubmitLoading(false);
     }
@@ -347,13 +385,13 @@ const WritePrescription = () => {
               <span style={{ fontSize: '0.95rem', lineHeight: 1.5 }}>
                 {selectedFile
                   ? `Selected: ${selectedFile.name} — click to replace`
-                  : 'Drag & drop or click to upload PDF, JPG, PNG (max 10 MB)'}
+                  : 'Drag & drop or choose a PDF or image (JPG, PNG, WebP; max 10 MB)'}
               </span>
               <input
                 type="file" 
                 id="rx_file" 
                 onChange={handleFileChange}
-                accept=".pdf,.jpg,.jpeg,.png,.webp"
+                accept="application/pdf,image/jpeg,image/png,image/webp,.pdf,.jpg,.jpeg,.png,.webp"
                 aria-describedby="rx-file-help"
                 style={{
                   position: 'absolute',
@@ -369,8 +407,15 @@ const WritePrescription = () => {
               />
             </label>
             <span id="rx-file-help" style={{ display: 'block', marginBottom: '12px', color: 'var(--text-muted)', fontSize: '0.78rem' }}>
-              Supported formats: PDF, JPG, JPEG, PNG, and WebP.
+              Upload a PDF or an image of the prescription (JPG, JPEG, PNG, or WebP). The selected image will be previewed below.
             </span>
+            {selectedImagePreview && (
+              <img
+                src={selectedImagePreview}
+                alt="Selected prescription image preview"
+                style={{ display: 'block', maxWidth: '100%', maxHeight: '320px', objectFit: 'contain', marginBottom: '12px', borderRadius: '12px', border: '1px solid var(--border)' }}
+              />
+            )}
             {fileError && (
               <p role="alert" style={{ margin: '0 0 12px', color: '#b91c1c', fontSize: '0.85rem' }}>
                 {fileError}
@@ -386,8 +431,13 @@ const WritePrescription = () => {
                   className="btn btn-outline btn-sm"
                   style={{ marginRight: '8px' }}
                 >
-                  {ocrLoading ? 'Scanning...' : '🔍 Scan with OCR'}
+                  {ocrLoading ? 'Analyzing scan...' : '🔄 Analyze scan again'}
                 </button>
+                {extractionNotice && (
+                  <p role="status" style={{ margin: '10px 0', color: '#475569', fontSize: '0.85rem' }}>
+                    {extractionNotice}
+                  </p>
+                )}
                 {showOcrPreview && (
                   <pre style={{
                     marginTop: '12px',
@@ -406,90 +456,127 @@ const WritePrescription = () => {
               </div>
             )}
 
-            {/* Medicines section */}
-            <h3 style={{ fontSize: '1.05rem', fontWeight: 700, color: '#1e1b4b', marginTop: '24px', marginBottom: '12px', borderBottom: '1px solid var(--border)', paddingBottom: '6px' }}>Medicines</h3>
-            
-            <div className="table-responsive" style={{ overflowX: 'auto' }}>
-              <table className="table" style={{ width: '100%', fontSize: '0.9rem', borderCollapse: 'collapse' }}>
-                <thead>
-                  <tr style={{ borderBottom: '2px solid var(--border)' }}>
-                    <th style={{ textAlign: 'left', padding: '8px' }}>Medicine Name *</th>
-                    <th style={{ textAlign: 'left', padding: '8px' }}>Dosage</th>
-                    <th style={{ textAlign: 'left', padding: '8px' }}>Timing/Frequency</th>
-                    <th style={{ textAlign: 'left', padding: '8px' }}>Duration</th>
-                    <th style={{ width: '50px' }}></th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {medicines.map((med, idx) => (
-                    <tr key={idx} style={{ borderBottom: '1px solid var(--border)' }}>
-                      <td style={{ padding: '6px 4px' }}>
-                        <input 
-                          type="text" 
-                          value={med.name}
-                          onChange={(e) => updateMedicineField(idx, 'name', e.target.value)}
-                          className="form-input form-input-sm" 
-                          required={!selectedFile}
-                          placeholder="Paracetamol"
-                          style={{ width: '90%', padding: '6px 10px', borderRadius: '6px', border: '1px solid var(--border)' }}
-                        />
-                      </td>
-                      <td style={{ padding: '6px 4px' }}>
-                        <input 
-                          type="text" 
-                          value={med.dosage}
-                          onChange={(e) => updateMedicineField(idx, 'dosage', e.target.value)}
-                          className="form-input form-input-sm" 
-                          placeholder="500 mg"
-                          style={{ width: '90%', padding: '6px 10px', borderRadius: '6px', border: '1px solid var(--border)' }}
-                        />
-                      </td>
-                      <td style={{ padding: '6px 4px' }}>
-                        <input 
-                          type="text" 
-                          value={med.timing}
-                          onChange={(e) => updateMedicineField(idx, 'timing', e.target.value)}
-                          className="form-input form-input-sm" 
-                          placeholder="Once daily"
-                          style={{ width: '90%', padding: '6px 10px', borderRadius: '6px', border: '1px solid var(--border)' }}
-                        />
-                      </td>
-                      <td style={{ padding: '6px 4px' }}>
-                        <input 
-                          type="text" 
-                          value={med.duration}
-                          onChange={(e) => updateMedicineField(idx, 'duration', e.target.value)}
-                          className="form-input form-input-sm" 
-                          placeholder="5 days"
-                          style={{ width: '90%', padding: '6px 10px', borderRadius: '6px', border: '1px solid var(--border)' }}
-                        />
-                      </td>
-                      <td style={{ padding: '6px 4px', textAlign: 'center' }}>
-                        {medicines.length > 1 && (
-                          <button 
-                            type="button" 
-                            onClick={() => removeMedicineRow(idx)}
-                            className="btn btn-ghost btn-sm" 
-                            style={{ color: 'var(--danger)', fontSize: '1.2rem', padding: '0 8px' }}
-                          >
-                            &times;
-                          </button>
-                        )}
-                      </td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
-
-            <button 
-              type="button" 
-              onClick={addMedicineRow}
-              className="btn btn-outline btn-sm" 
-              style={{ marginTop: '12px' }}
-            >
-              + Add Medicine
-            </button>
+            <section aria-live="polite" style={{ marginTop: '24px' }}>
+              <h3 style={{ fontSize: '1.05rem', fontWeight: 700, color: '#1e1b4b', marginBottom: '8px', borderBottom: '1px solid var(--border)', paddingBottom: '6px' }}>
+                Medicines
+              </h3>
+              <p style={{ margin: '0 0 12px', color: 'var(--text-muted)', fontSize: '0.85rem' }}>
+                Review medicines detected from the scan or add medicine details manually. Confirm all details against the doctor's instructions before saving.
+              </p>
+              {medicines.length > 0 ? (
+                <div className="table-responsive" style={{ overflowX: 'auto' }}>
+                  <table className="table" style={{ width: '100%', fontSize: '0.9rem', borderCollapse: 'collapse' }}>
+                    <thead>
+                      <tr style={{ borderBottom: '2px solid var(--border)' }}>
+                        <th style={{ textAlign: 'left', padding: '8px' }}>Medicine Name *</th>
+                        <th style={{ textAlign: 'left', padding: '8px' }}>Strength</th>
+                        <th style={{ textAlign: 'left', padding: '8px' }}>Dose</th>
+                        <th style={{ textAlign: 'left', padding: '8px' }}>Timing</th>
+                        <th style={{ textAlign: 'left', padding: '8px' }}>Duration</th>
+                        <th style={{ textAlign: 'left', padding: '8px' }}>Quantity</th>
+                        <th style={{ width: '48px' }}></th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {medicines.map((med, index) => (
+                        <tr key={`${med.name}-${index}`} style={{ borderBottom: '1px solid var(--border)' }}>
+                          <td style={{ padding: '6px 4px' }}>
+                            <input
+                              type="text"
+                              value={med.name || ''}
+                              onChange={event => updateMedicineField(index, 'name', event.target.value)}
+                              className="form-input form-input-sm"
+                              placeholder="Medicine name"
+                              aria-label={`Medicine name ${index + 1}`}
+                              required
+                              style={{ width: '140px', padding: '6px 10px' }}
+                            />
+                          </td>
+                          <td style={{ padding: '6px 4px' }}>
+                            <input
+                              type="text"
+                              value={med.dosage || ''}
+                              onChange={event => updateMedicineField(index, 'dosage', event.target.value)}
+                              className="form-input form-input-sm"
+                              placeholder="e.g. 250 mg"
+                              aria-label={`Strength for medicine ${index + 1}`}
+                              style={{ width: '110px', padding: '6px 10px' }}
+                            />
+                          </td>
+                          <td style={{ padding: '6px 4px' }}>
+                            <input
+                              type="text"
+                              value={med.units_per_dose || ''}
+                              onChange={event => updateMedicineField(index, 'units_per_dose', event.target.value)}
+                              className="form-input form-input-sm"
+                              placeholder="e.g. 5 ml"
+                              aria-label={`Dose for medicine ${index + 1}`}
+                              style={{ width: '100px', padding: '6px 10px' }}
+                            />
+                          </td>
+                          <td style={{ padding: '6px 4px' }}>
+                            <input
+                              type="text"
+                              value={med.timing || med.frequency || ''}
+                              onChange={event => updateMedicineField(index, 'timing', event.target.value)}
+                              className="form-input form-input-sm"
+                              placeholder="e.g. TDS"
+                              aria-label={`Timing for medicine ${index + 1}`}
+                              style={{ width: '110px', padding: '6px 10px' }}
+                            />
+                          </td>
+                          <td style={{ padding: '6px 4px' }}>
+                            <input
+                              type="text"
+                              value={med.duration || ''}
+                              onChange={event => updateMedicineField(index, 'duration', event.target.value)}
+                              className="form-input form-input-sm"
+                              placeholder="e.g. 5 days"
+                              aria-label={`Duration for medicine ${index + 1}`}
+                              style={{ width: '100px', padding: '6px 10px' }}
+                            />
+                          </td>
+                          <td style={{ padding: '6px 4px' }}>
+                            <input
+                              type="text"
+                              value={med.quantity || ''}
+                              onChange={event => updateMedicineField(index, 'quantity', event.target.value)}
+                              className="form-input form-input-sm"
+                              placeholder="Optional"
+                              aria-label={`Quantity for medicine ${index + 1}`}
+                              style={{ width: '100px', padding: '6px 10px' }}
+                            />
+                          </td>
+                          <td style={{ padding: '6px 4px', textAlign: 'center' }}>
+                            <button
+                              type="button"
+                              onClick={() => removeMedicineRow(index)}
+                              className="btn btn-ghost btn-sm"
+                              aria-label={`Remove medicine ${index + 1}`}
+                              style={{ color: 'var(--danger)', fontSize: '1.2rem', padding: '0 8px' }}
+                            >
+                              &times;
+                            </button>
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              ) : (
+                <div style={{ padding: '16px', border: '1px dashed var(--border)', borderRadius: '12px', color: 'var(--text-muted)', fontSize: '0.9rem' }}>
+                  No medicines added yet. Add them here manually or upload a scan to detect them.
+                </div>
+              )}
+              <button
+                type="button"
+                onClick={addMedicineRow}
+                className="btn btn-outline btn-sm"
+                style={{ marginTop: '12px' }}
+              >
+                + Add medicine manually
+              </button>
+            </section>
 
             {/* Submitting Buttons */}
             <div style={{ marginTop: '32px', display: 'flex', flexDirection: 'column', gap: '8px' }}>
@@ -499,7 +586,7 @@ const WritePrescription = () => {
                 className="btn btn-primary btn-lg btn-full"
                 style={{ background: 'linear-gradient(135deg, #7c3aed, #a855f7)', color: '#ffffff', fontWeight: 600 }}
               >
-                {submitLoading ? 'Saving & Generating AI Explanation...' : 'Save & Send to Patient'}
+                {submitLoading ? 'Saving prescription and preparing care plan...' : 'Save & Share with Patient'}
               </button>
               <Link to="/doctor/dashboard" className="btn btn-outline btn-full" style={{ textAlign: 'center' }}>Cancel</Link>
             </div>

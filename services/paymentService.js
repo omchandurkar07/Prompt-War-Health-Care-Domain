@@ -1,15 +1,31 @@
 const crypto = require('crypto');
 const Razorpay = require('razorpay');
 
+const isConfiguredValue = value => Boolean(
+  value && !/^(?:replace_me|rzp_test_replace_me|paste_your|your_)/i.test(value.trim())
+);
+
+const getPaymentMode = () => {
+  const hasKeyId = isConfiguredValue(process.env.RAZORPAY_KEY_ID);
+  const hasKeySecret = isConfiguredValue(process.env.RAZORPAY_KEY_SECRET);
+  if (hasKeyId !== hasKeySecret) {
+    const error = new Error('Razorpay requires both RAZORPAY_KEY_ID and RAZORPAY_KEY_SECRET.');
+    error.status = 503;
+    throw error;
+  }
+  return hasKeyId ? 'razorpay' : 'simulation';
+};
+
 const getRazorpayClient = () => {
-  const keyId = process.env.RAZORPAY_KEY_ID;
-  const keySecret = process.env.RAZORPAY_KEY_SECRET;
-  if (!keyId || !keySecret) {
+  if (getPaymentMode() !== 'razorpay') {
     const error = new Error('Razorpay is not configured. Set RAZORPAY_KEY_ID and RAZORPAY_KEY_SECRET.');
     error.status = 503;
     throw error;
   }
-  return new Razorpay({ key_id: keyId, key_secret: keySecret });
+  return new Razorpay({
+    key_id: process.env.RAZORPAY_KEY_ID,
+    key_secret: process.env.RAZORPAY_KEY_SECRET
+  });
 };
 
 const verifyPaymentSignature = (orderId, paymentId, signature) => {
@@ -46,6 +62,7 @@ const verifyWebhookSignature = (rawBody, signature) => {
 };
 
 module.exports = {
+  getPaymentMode,
   getRazorpayClient,
   verifyPaymentSignature,
   verifyWebhookSignature

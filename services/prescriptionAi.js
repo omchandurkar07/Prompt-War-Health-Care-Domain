@@ -3,6 +3,7 @@ const path = require('path');
 const axios = require('axios');
 const { GoogleGenerativeAI } = require('@google/generative-ai');
 const { GoogleAIFileManager } = require('@google/generative-ai/server');
+const { normalizeExtractedMedicines } = require('./prescriptionExtraction');
 
 const COMMON_MEDS_EXPLANATIONS = [
   {
@@ -81,79 +82,114 @@ function escapeHtml(unsafe) {
     .replace(/'/g, "&#039;");
 }
 
-function generateFallbackExplanation(medicines, doctorNotes = '') {
+const RECOVERY_PLAN_DISCLAIMER = 'This plan organizes the prescription and general self-care information. It does not replace instructions from your doctor or pharmacist.';
+
+const normalizeRecoveryPlan = (plan, fallback) => {
+  const normalizeList = (value, fallbackItems) => {
+    if (!Array.isArray(value)) return fallbackItems;
+    const items = value
+      .filter(item => typeof item === 'string' && item.trim())
+      .slice(0, 6)
+      .map(item => item.trim().slice(0, 320));
+    return items.length ? items : fallbackItems;
+  };
+  const normalizeMedicines = (value, fallbackItems) => {
+    if (!Array.isArray(value)) return fallbackItems;
+    const items = value
+      .filter(item => item && typeof item === 'object')
+      .slice(0, 30)
+      .map(item => ({
+        name: String(item.name || '').trim().slice(0, 120),
+        purpose: String(item.purpose || '').trim().slice(0, 240),
+        how_to_take: String(item.how_to_take || '').trim().slice(0, 320),
+        caution: String(item.caution || '').trim().slice(0, 240)
+      }))
+      .filter(item => item.name);
+    return items.length ? items : fallbackItems;
+  };
+
+  return {
+    medicine_guidance: normalizeMedicines(plan?.medicine_guidance, fallback.medicine_guidance),
+    today: normalizeList(plan?.today, fallback.today),
+    next_days: normalizeList(plan?.next_days, fallback.next_days),
+    food: normalizeList(plan?.food, fallback.food),
+    rest: normalizeList(plan?.rest, fallback.rest),
+    watch_for: normalizeList(plan?.watch_for, fallback.watch_for),
+    follow_up: normalizeList(plan?.follow_up, fallback.follow_up),
+    disclaimer: RECOVERY_PLAN_DISCLAIMER
+  };
+};
+
+const createFallbackRecoveryPlan = (medicines = [], diagnosis = '', doctorNotes = '', followUpDate = '') => {
+  const hasDoctorNotes = Boolean(String(doctorNotes || '').trim());
+  const plan = {
+    medicine_guidance: medicines.filter(medicine => medicine?.name).map(medicine => {
+      const dose = [medicine.dosage, medicine.units_per_dose].filter(Boolean).join(' · ') || 'Dose not specified on the digital summary';
+      const timing = medicine.timing || medicine.frequency || 'Schedule not specified on the digital summary';
+      const duration = medicine.duration || 'Duration not specified';
+      const quantity = medicine.quantity || 'Quantity not specified';
+      return {
+        name: medicine.name,
+        purpose: 'Use only for the reason explained by your prescribing clinician; the scan alone cannot confirm why it was chosen.',
+        how_to_take: `${dose}; ${timing}; ${duration}. Follow the pharmacy label. If any direction is unclear, confirm it with the prescriber or pharmacist before taking it.`,
+        caution: `${quantity}${medicine.quantity_source === 'calculated' ? ' (estimated from the written schedule; verify with the prescriber or pharmacist)' : ''}`
+      };
+    }),
+    today: [
+      'Compare each medicine, dose, schedule, and quantity with the original prescription and pharmacy label.',
+      'If a dose or schedule is missing or hard to read, ask the prescriber or pharmacist before taking that medicine.',
+      ...(hasDoctorNotes ? [`Follow your doctor’s instructions: ${String(doctorNotes).trim().slice(0, 240)}`] : [])
+    ],
+    next_days: [
+      'Take medicines only as written on the verified prescription label; do not start, stop, or change a dose based on this summary.',
+      `Duration: ${medicines.some(medicine => medicine.duration) ? medicines.map(medicine => `${medicine.name}: ${medicine.duration || 'not stated'}`).join('; ') : 'No treatment duration was recorded; confirm it with your clinician.'}`,
+      'Keep a short note of your symptoms and any side effects to discuss at follow-up.'
+    ],
+    food: [
+      ...medicines.filter(medicine => medicine.instructions).map(medicine => `${medicine.name}: ${medicine.instructions}`),
+      'No specific diet is prescribed in this summary. Choose your usual balanced meals as tolerated, unless your clinician has given you dietary restrictions.',
+      'Drink fluids normally unless you have been told to limit fluids.'
+    ],
+    rest: [
+      'Rest when you feel tired and return to normal activity gradually as you feel better.',
+      'No fixed number of rest hours was specified; follow any activity restrictions given by your clinician.'
+    ],
+    watch_for: [
+      'Seek urgent medical help for trouble breathing, swelling of the face or throat, fainting, severe chest pain, or another severe reaction.',
+      'Contact your clinician if symptoms worsen, new concerning symptoms appear, or you are unsure whether a medicine is causing a problem.'
+    ],
+    follow_up: [
+      ...(followUpDate ? [`Attend the follow-up recorded for ${followUpDate}.`] : []),
+      ...(diagnosis ? [`Discuss your progress for ${diagnosis} with your clinician if symptoms are not improving as expected.`] : ['If symptoms are not improving as expected, contact your clinician for advice.'])
+    ]
+  };
+
+  return normalizeRecoveryPlan(plan, plan);
+};
+
+function generateFallbackExplanation(medicines, doctorNotes = '', diagnosis = '', followUpDate = '') {
+  const plan = createFallbackRecoveryPlan(medicines, diagnosis, doctorNotes, followUpDate);
   let html = [];
   html.push('<div class="ai-explanation-box">');
-  html.push('<h3 style="color:#4f46e5; margin-top:0; font-weight:700;"><i class="fas fa-robot"></i> AI Prescription Assistant</h3>');
-  html.push('<p style="font-size:0.9rem; color:#4b5563; margin-bottom:16px;">This analysis was generated by our AI clinical parser. Please review the detailed explanation of your prescribed medications below:</p>');
-
-  if (doctorNotes) {
-    html.push('<div style="background:#f3f4f6; padding:12px 16px; border-radius:8px; margin-bottom:20px; font-size:0.88rem; border-left:4px solid #9ca3af;">');
-    html.push(`<strong>Doctor's Clinical Guidance:</strong><br/>${escapeHtml(doctorNotes)}`);
-    html.push('</div>');
-  }
-
-  if (medicines && medicines.length > 0) {
-    html.push('<h4 style="color:#1e293b; font-weight:700; margin-bottom:12px; border-bottom:1px solid #e5e7eb; padding-bottom:6px;">Medication Details</h4>');
-    medicines.forEach(med => {
-      const name = (med.name || '').trim();
-      if (!name) return;
-
-      let matchFound = false;
-      let expData = null;
-      for (const item of COMMON_MEDS_EXPLANATIONS) {
-        if (item.pattern.test(name)) {
-          matchFound = true;
-          expData = item;
-          break;
-        }
-      }
-
-      html.push('<div style="margin-bottom:18px; padding-left:4px;">');
-      html.push(`<strong style="font-size:0.95rem; color:#1e1b4b;">💊 ${name}</strong>`);
-      if (med.dosage) {
-        html.push(` <span style="font-size:0.8rem; background:#eff6ff; color:#1d4ed8; padding:2px 8px; border-radius:12px; margin-left:6px;">${med.dosage}</span>`);
-      }
-      if (med.timing || med.frequency) {
-        html.push(` <span style="font-size:0.8rem; background:#f0fdf4; color:#166534; padding:2px 8px; border-radius:12px; margin-left:4px;">${med.timing || med.frequency}</span>`);
-      }
-
-      html.push('<div style="font-size:0.85rem; margin-top:6px; color:#4b5563; padding-left:16px;">');
-      if (matchFound && expData) {
-        html.push(`<p style="margin:3px 0;"><strong>Category:</strong> ${expData.class}</p>`);
-        html.push(`<p style="margin:3px 0;"><strong>What it does:</strong> ${expData.purpose}</p>`);
-        html.push(`<p style="margin:3px 0;"><strong>How to take:</strong> ${expData.instructions}</p>`);
-        html.push(`<p style="margin:3px 0;"><strong>Common side effects:</strong> ${expData.side_effects}</p>`);
-        html.push(`<p style="margin:3px 0; color:#b45309;"><strong>Precautions:</strong> ${expData.precautions}</p>`);
-      } else {
-        html.push('<p style="margin:3px 0;"><strong>Status:</strong> Active prescription item.</p>');
-        if (med.instructions) {
-          html.push(`<p style="margin:3px 0;"><strong>Instructions:</strong> ${med.instructions}</p>`);
-        } else {
-          html.push('<p style="margin:3px 0;"><strong>Instructions:</strong> Take as directed by your clinician. Best taken with water, keeping regular daily timings.</p>');
-        }
-      }
-      html.push('</div>');
-      html.push('</div>');
-    });
-  }
-
-  html.push('<h4 style="color:#1e293b; font-weight:700; margin-top:20px; margin-bottom:10px; border-bottom:1px solid #e5e7eb; padding-bottom:6px;">💡 General Wellness Guidelines</h4>');
-  html.push('<ul style="font-size:0.85rem; color:#4b5563; padding-left:20px; margin:0 0 12px 0; line-height:1.5;">');
-  html.push('<li><strong>Stay Hydrated:</strong> Drink plenty of water throughout the day unless otherwise restricted.</li>');
-  html.push('<li><strong>Adherence:</strong> Complete the full course of all medications. Set reminders using the app dashboard.</li>');
-  html.push('<li><strong>Drug Interactions:</strong> Avoid taking any over-the-counter painkillers or cough drops without checking with your pharmacist.</li>');
-  html.push('<li><strong>Dizziness/Drowsiness:</strong> Avoid driving or physical strain if you experience weakness after taking your morning medicines.</li>');
-  html.push('</ul>');
-
-  html.push('<div style="background:#fffbeb; border:1px solid #fef3c7; color:#b45309; padding:10px 14px; border-radius:8px; font-size:0.75rem; margin-top:20px;">');
-  html.push('<strong>Medical Disclaimer:</strong> This automated breakdown is for informational purposes only. Do not substitute this for professional medical advice. If you experience severe side effects or allergies, contact emergency services immediately.');
-  html.push('</div>');
-
-  html.push('<div style="text-align:center; margin-top:20px; border-top:1px solid #e5e7eb; padding-top:15px;">');
-  html.push('<p style="font-size:1.15rem; color:#4f46e5; font-weight:bold; margin:0 0 4px 0;">❤️ Get Well Soon!</p>');
-  html.push('<p style="font-size:0.82rem; color:#6b7280; margin:0; font-style:italic;">"Your health is our priority. Wishing you a speedy recovery!"</p>');
-  html.push('</div>');
+  html.push('<h3 style="color:#4f46e5; margin-top:0; font-weight:700;">Your recovery plan</h3>');
+  const sections = [
+    ['Medicines — check against the pharmacy label', plan.medicine_guidance.map(med => (
+      `<strong>${escapeHtml(med.name)}</strong><br/>${escapeHtml(med.how_to_take)}<br/><span>Quantity: ${escapeHtml(med.caution)}</span>`
+    ))],
+    ['What to do today', plan.today],
+    ['Over the next few days', plan.next_days],
+    ['Food and fluids', plan.food],
+    ['Rest and activity', plan.rest],
+    ['When to get help', plan.watch_for],
+    ['Follow-up', plan.follow_up]
+  ];
+  sections.forEach(([title, items]) => {
+    if (!items.length) return;
+    html.push(`<h4 style="color:#1e293b; margin:18px 0 6px;">${title}</h4><ul style="margin:0; padding-left:20px; color:#4b5563;">`);
+    items.forEach(item => html.push(`<li style="margin:4px 0;">${typeof item === 'string' ? escapeHtml(item) : item}</li>`));
+    html.push('</ul>');
+  });
+  html.push(`<p style="font-size:0.78rem; color:#64748b; border-top:1px solid #e5e7eb; padding-top:12px; margin-top:18px;">${RECOVERY_PLAN_DISCLAIMER}</p>`);
   html.push('</div>');
 
   return html.join('');
@@ -179,7 +215,8 @@ async function explainPrescriptionWithAi(filePath, mimeType, doctorNotes = '', l
     diagnosis: '',
     doctor_notes: '',
     follow_up_date: '',
-    success: false
+    success: false,
+    recovery_plan: createFallbackRecoveryPlan([], '', doctorNotes)
   };
 
   if (!filePath || !fs.existsSync(filePath)) {
@@ -191,52 +228,62 @@ async function explainPrescriptionWithAi(filePath, mimeType, doctorNotes = '', l
   const isXaiValid = xaiKey && !xaiKey.startsWith('PASTE_YOUR');
 
   const prompt = `
-  You are a board-certified clinical pharmacist and medical expert specializing in clinical document interpretation, handwriting OCR, and patient communication.
+  You are a careful prescription transcription assistant. Extract only information clearly visible in the uploaded document. Never diagnose, guess an unclear medicine, invent a dose, or fill in missing directions.
   
   Analyze this uploaded prescription image or PDF document carefully and perform the following tasks:
   
-  1. Extract the diagnosis (the diagnosed disease, condition, or symptoms). If not explicitly written, use your medical expertise to make a logical clinical deduction based on the prescribed medicines and general context.
-  2. Extract any suggested follow-up date. Format it as YYYY-MM-DD. If none is specified or suggested, return null.
+  1. Transcribe the diagnosis only if it is explicitly written. Otherwise return an empty string.
+  2. Extract a follow-up date only if explicitly written. Format it as YYYY-MM-DD. Otherwise return an empty string.
   3. Extract all medicines listed. For each medicine, extract:
-     - name: Correct clinical brand name or generic name (e.g. if handwritten as 'paracetol', extract as 'Paracetamol'; if 'amox', extract as 'Amoxicillin').
-     - dosage: Strength/dose (e.g. '500mg', '1 tablet', '5ml').
-     - timing: Frequency or timing (e.g. 'Once daily after food', 'Twice daily', 'Morning and Night').
-     - duration: Treatment duration (e.g. '5 days', '1 week').
+     - name: Transcribe the medicine name. Correct a spelling only when the intended name is unambiguous; otherwise preserve the visible text and mark confidence low.
+     - dosage: Strength and amount per dose when written (e.g. '500 mg', '1 tablet', '5 ml').
+     - units_per_dose: Number and form taken at each dose when explicitly written (e.g. '1 tablet', '2 capsules', '5 ml'); leave empty if unclear.
+     - timing: Exact frequency/time instructions when written (e.g. '1-0-1 after food', 'Twice daily', 'Morning and Night'). Preserve prescription abbreviations if uncertain.
+     - duration: Treatment duration when written (e.g. '5 days', '1 week').
+     - quantity: Total dispensed quantity only when explicitly written (e.g. '10 tablets'). Do not calculate this field; use an empty string when absent.
      - route: Administration route (e.g. 'Oral', 'Topical', 'Ophthalmic').
      - instructions: Patient instructions (e.g. 'Take with warm water', 'Avoid cold drinks').
-  4. Generate a patient-friendly clinical explanation of the prescription with the following sections in the ${language} language:
-     - Medicine Purpose: For each medicine, explain what it does and why it was prescribed.
-     - Dosage & Timing: Detailed guidance on when and how to take each medicine.
-     - Important Precautions: Key safety warnings and contraindications.
-     - Food & Water Advice: Dietary instructions (e.g., take with food, avoid specific foods/liquids, fluid intake).
-     - Lifestyle Recommendations: Rest, exercise, or other non-pharmacological care advice.
-     - Warning Signs: Critical symptoms or reactions when the patient must contact the doctor immediately.
-     - Follow-Up Advice: Details on when to follow up or get re-evaluated.
-     
-  Language/Translation Requirements:
-  - You MUST write the entire "explanation" HTML block in the ${language} language. Keep the medicine names in English (or phonetic spelling) but translate all purposes, instructions, precautions, lifestyle advice, and warning signs into ${language}.
-  
-  Style and Formatting Requirements:
-  - The "explanation" field MUST contain clean HTML content with modern, professional inline styles. Avoid using external CSS or markdown formatting inside it.
-  - Design the HTML with beautiful, clean UI components (e.g. card layouts with subtle borders, soft backgrounds like light indigo for medicines, soft green for food advice, soft red/orange for warning signs, and clear typography).
-  - Include the following exact AI disclaimer at the bottom of the HTML: "This explanation is AI-generated for patient understanding only and should not replace professional medical advice."
+     - confidence: 'high', 'medium', or 'low' for transcription confidence. Use low for uncertain handwriting or any uncertain field.
+  4. Do not interpret tablet-strength as quantity. Do not derive a schedule from medical knowledge. Return every medicine that is explicitly listed and omit unrelated text.
+  5. Generate a concise, practical recovery_plan in ${language} using only the verified prescription and clinician instructions:
+     - medicine_guidance: one item per listed medicine with name, purpose (if uncertain say to ask the prescriber), how_to_take (repeat only the exact written dose, schedule, duration, and quantity; point out missing directions), and caution.
+     - today: 2-4 concrete steps for checking the pharmacy label, confirming unclear directions, and following the clinician's written advice.
+     - next_days: a short staged checklist (today, next 1-2 days, and until the stated follow-up or end of the written course). Do not invent a treatment duration.
+     - food: practical, diagnosis-appropriate food advice only when the diagnosis or clinician instructions support it. Otherwise recommend usual balanced meals as tolerated, no invented restrictions, and fluids only if not restricted.
+     - rest: practical recovery and activity guidance. Never invent a number of rest hours or prescribe bed rest when not stated.
+     - watch_for: relevant warning signs; if diagnosis is unclear, give only general serious-reaction/emergency advice.
+     - follow_up: use only the explicit follow-up date or written instructions; otherwise advise contacting the clinician if worsening or not improving.
+     Avoid generic filler, repeated disclaimers, diagnosis by inference, extra medicines, dosage changes, or certainty about recovery.
+  6. Add a brief one- or two-sentence explanation in ${language}; do not repeat the recovery plan in this field.
   
   You MUST respond ONLY in valid JSON format matching this schema:
   {
-    "diagnosis": "string (the diagnosed disease or condition, or logical deduction)",
+    "diagnosis": "string (only a diagnosis explicitly written, otherwise empty)",
     "doctor_notes": "string (any clinical instructions or advice for the patient, or empty if none)",
-    "follow_up_date": "string (follow-up date in YYYY-MM-DD format if explicitly specified or suggested, otherwise null)",
+    "follow_up_date": "string (explicit date in YYYY-MM-DD format, otherwise empty)",
     "medicines": [
       {
         "name": "string",
         "dosage": "string",
+        "units_per_dose": "string (written units per dose, otherwise empty)",
         "timing": "string",
         "duration": "string",
         "route": "string",
-        "instructions": "string"
+        "instructions": "string",
+        "quantity": "string (explicitly written total count or volume, otherwise empty)",
+        "confidence": "high | medium | low"
       }
     ],
-    "explanation": "string (HTML content with inline CSS styles)"
+    "explanation": "string (short HTML summary, without repeated generic wellness text)",
+    "recovery_plan": {
+      "medicine_guidance": [{"name": "string", "purpose": "string", "how_to_take": "string", "caution": "string"}],
+      "today": ["string"],
+      "next_days": ["string"],
+      "food": ["string"],
+      "rest": ["string"],
+      "watch_for": ["string"],
+      "follow_up": ["string"]
+    }
   }
   `;
 
@@ -281,10 +328,14 @@ async function explainPrescriptionWithAi(filePath, mimeType, doctorNotes = '', l
       result.raw_response = respText;
       
       const data = JSON.parse(respText);
-      result.medicines = data.medicines || [];
+      result.medicines = normalizeExtractedMedicines(data.medicines);
       result.diagnosis = data.diagnosis || '';
       result.doctor_notes = data.doctor_notes || '';
       result.follow_up_date = data.follow_up_date || '';
+      result.recovery_plan = normalizeRecoveryPlan(
+        data.recovery_plan,
+        createFallbackRecoveryPlan(result.medicines, result.diagnosis, result.doctor_notes || doctorNotes, result.follow_up_date)
+      );
 
       let explanationHtml = data.explanation || '';
       if (doctorNotes) {
@@ -351,10 +402,14 @@ async function explainPrescriptionWithAi(filePath, mimeType, doctorNotes = '', l
       result.raw_response = respText;
       
       const data = JSON.parse(respText);
-      result.medicines = data.medicines || [];
+      result.medicines = normalizeExtractedMedicines(data.medicines);
       result.diagnosis = data.diagnosis || '';
       result.doctor_notes = data.doctor_notes || '';
       result.follow_up_date = data.follow_up_date || '';
+      result.recovery_plan = normalizeRecoveryPlan(
+        data.recovery_plan,
+        createFallbackRecoveryPlan(result.medicines, result.diagnosis, result.doctor_notes || doctorNotes, result.follow_up_date)
+      );
 
       let explanationHtml = data.explanation || '';
       if (doctorNotes) {
@@ -398,57 +453,70 @@ async function explainPrescriptionWithAi(filePath, mimeType, doctorNotes = '', l
         console.warn(`[AI] Local OCR fallback failed: ${ocrErr.message}`);
       }
     }
-    result.medicines = medicines;
-    result.explanation = sanitizeAiHtml(generateFallbackExplanation(medicines, doctorNotes));
+    result.medicines = normalizeExtractedMedicines(medicines);
+    result.recovery_plan = createFallbackRecoveryPlan(result.medicines, result.diagnosis, doctorNotes, result.follow_up_date);
+    result.explanation = sanitizeAiHtml(generateFallbackExplanation(
+      result.medicines,
+      doctorNotes,
+      result.diagnosis,
+      result.follow_up_date
+    ));
     result.status = 'fallback';
   }
 
   return result;
 }
 
-async function generateDigitalPrescriptionExplanation(medicines, diagnosis = '', doctorNotes = '', language = 'English') {
+async function generateDigitalPrescriptionExplanation(medicines, diagnosis = '', doctorNotes = '', language = 'English', followUpDate = '') {
   const result = {
     explanation: '',
     raw_response: '',
     status: 'fallback',
-    language: language
+    language: language,
+    recovery_plan: createFallbackRecoveryPlan(medicines, diagnosis, doctorNotes, followUpDate)
   };
 
   const xaiKey = process.env.XAI_API_KEY || process.env.GROK_API_KEY || '';
   const isXaiValid = xaiKey && !xaiKey.startsWith('PASTE_YOUR');
 
   const medsText = medicines.map(m => (
-    `- Name: ${m.name}, Dosage: ${m.dosage || 'As directed'}, Timing/Frequency: ${m.timing || m.frequency || 'As directed'}, Duration: ${m.duration || 'As directed'}, Route: ${m.route || 'Oral'}, Instructions: ${m.instructions || 'None'}`
+    `- Name: ${m.name}, Strength: ${m.dosage || 'Not specified'}, Units per dose: ${m.units_per_dose || 'Not specified'}, Timing/Frequency: ${m.timing || m.frequency || 'Not specified'}, Duration: ${m.duration || 'Not specified'}, Quantity: ${m.quantity || 'Not specified'}, Quantity source: ${m.quantity_source || 'not_specified'}, Route: ${m.route || 'Not specified'}, Instructions: ${m.instructions || 'None'}`
   )).join('\n');
 
   const prompt = `
-  You are a board-certified clinical pharmacist and medical expert. Generate a patient-friendly clinical explanation and summary of the following digital prescription.
+  Create a concise patient recovery plan in ${language} from this doctor's digital prescription. This is a health communication task, not a diagnosis or a new treatment plan.
   
   Prescribed Medicines:
   ${medsText}
   
   Diagnosis: ${diagnosis || 'Not specified'}
   Doctor's Notes: ${doctorNotes || 'None'}
+  Follow-up date: ${followUpDate || 'Not specified'}
   
-  You MUST write the entire explanation in the ${language} language. Keep the medicine names in English (or phonetic spelling) but translate all purposes, instructions, precautions, lifestyle advice, and warning signs into ${language}.
+  Use the prescription's exact medicines, dose, schedule, duration, and quantity. Never add, infer, or change any medicine or dose. If a direction is missing, say it is not specified and ask the patient to confirm with the prescriber or pharmacist. Do not treat medicine knowledge as proof of the patient's diagnosis or the reason a medicine was selected. Keep medicine names in English; write advice in ${language}.
   
-  Generate a structured clinical explanation of the prescription with the following sections in ${language}:
-  - Medicine Purpose: For each medicine, explain what it does and why it was prescribed.
-  - Dosage & Timing: Detailed guidance on when and how to take each medicine.
-  - Important Precautions: Key safety warnings and contraindications.
-  - Food & Water Advice: Dietary instructions (e.g., take with food, avoid specific foods/liquids, fluid intake).
-  - Lifestyle Recommendations: Rest, exercise, or other non-pharmacological care advice.
-  - Warning Signs: Critical symptoms or reactions when the patient must contact the doctor immediately.
-  - Follow-Up Advice: Details on when to follow up or get re-evaluated.
-  
-  Style and Formatting Requirements:
-  - The "explanation" field MUST contain clean HTML content with modern, professional inline styles. Avoid using external CSS or markdown formatting inside it.
-  - Design the HTML with beautiful, clean UI components (e.g. card layouts with subtle borders, soft backgrounds like light indigo for medicines, soft green for food advice, soft red/orange for warning signs, and clear typography).
-  - Include the following exact AI disclaimer at the bottom of the HTML: "This explanation is AI-generated for patient understanding only and should not replace professional medical advice."
+  Return an actionable and non-repetitive recovery_plan JSON object:
+  - medicine_guidance: one item per prescribed medicine with name, purpose (only if supported by the written diagnosis/instructions; otherwise say ask the prescriber), how_to_take (repeat exact instructions, state what is missing), and caution.
+  - today: 2-4 specific steps to verify labels and follow the doctor's written instructions.
+  - next_days: staged steps for today, the next 1-2 days, and until the prescribed course/follow-up. Never invent a course length.
+  - food: meal guidance only when supported by diagnosis or written doctor instructions; otherwise suggest usual balanced meals as tolerated, no invented restrictions, and normal fluids unless restricted.
+  - rest: practical recovery guidance without inventing an hours-per-day number or unnecessary bed rest.
+  - watch_for: relevant warning signs; if context is insufficient, only general serious-reaction/emergency guidance.
+  - follow_up: only the stated follow-up plan/date, or advise contacting the clinician for worsening/not improving.
+  Use short clear sentences. Avoid generic filler, repeated disclaimers, unsolicited drug recommendations, and promises of recovery.
   
   You MUST respond ONLY in valid JSON format matching this schema:
   {
-    "explanation": "string (HTML content with inline CSS styles)"
+    "explanation": "string (brief summary without generic filler)",
+    "recovery_plan": {
+      "medicine_guidance": [{"name": "string", "purpose": "string", "how_to_take": "string", "caution": "string"}],
+      "today": ["string"],
+      "next_days": ["string"],
+      "food": ["string"],
+      "rest": ["string"],
+      "watch_for": ["string"],
+      "follow_up": ["string"]
+    }
   }
   `;
 
@@ -478,6 +546,10 @@ async function generateDigitalPrescriptionExplanation(medicines, diagnosis = '',
 
       const data = JSON.parse(respText);
       let explanationHtml = data.explanation || '';
+      result.recovery_plan = normalizeRecoveryPlan(
+        data.recovery_plan,
+        createFallbackRecoveryPlan(medicines, diagnosis, doctorNotes, followUpDate)
+      );
 
       if (doctorNotes) {
         const notesBlock = `
@@ -533,6 +605,10 @@ async function generateDigitalPrescriptionExplanation(medicines, diagnosis = '',
 
       const data = JSON.parse(respText);
       let explanationHtml = data.explanation || '';
+      result.recovery_plan = normalizeRecoveryPlan(
+        data.recovery_plan,
+        createFallbackRecoveryPlan(medicines, diagnosis, doctorNotes, followUpDate)
+      );
 
       if (doctorNotes) {
         const notesBlock = `
@@ -559,7 +635,13 @@ async function generateDigitalPrescriptionExplanation(medicines, diagnosis = '',
     }
   }
 
-  result.explanation = sanitizeAiHtml(generateFallbackExplanation(medicines, doctorNotes));
+  result.recovery_plan = createFallbackRecoveryPlan(medicines, diagnosis, doctorNotes, followUpDate);
+  result.explanation = sanitizeAiHtml(generateFallbackExplanation(
+    medicines,
+    doctorNotes,
+    diagnosis,
+    followUpDate
+  ));
   result.status = 'fallback';
 
   return result;
@@ -567,5 +649,6 @@ async function generateDigitalPrescriptionExplanation(medicines, diagnosis = '',
 
 module.exports = {
   explainPrescriptionWithAi,
-  generateDigitalPrescriptionExplanation
+  generateDigitalPrescriptionExplanation,
+  createFallbackRecoveryPlan
 };

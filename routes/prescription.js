@@ -15,11 +15,16 @@ const HealthRecord = require('../models/HealthRecord');
 const CarePlanItem = require('../models/CarePlanItem');
 
 const { doctorRequired, patientRequired } = require('../middleware/auth');
-const { explainPrescriptionWithAi, generateDigitalPrescriptionExplanation } = require('../services/prescriptionAi');
+const {
+  explainPrescriptionWithAi,
+  generateDigitalPrescriptionExplanation,
+  createFallbackRecoveryPlan
+} = require('../services/prescriptionAi');
 const { uploadFile } = require('../services/cloudinaryService');
 const { generatePrescriptionPdf } = require('../services/prescriptionPdf');
 const { generateCdsWarnings } = require('../services/cdsService');
 const { finalizePrescription } = require('../services/prescriptionFinalize');
+const { normalizeExtractedMedicines } = require('../services/prescriptionExtraction');
 
 const tempUpload = multer({ dest: 'static/uploads/temp' });
 
@@ -45,13 +50,32 @@ const toArray = (val) => {
   return Array.isArray(val) ? val : [val];
 };
 
+const getFormArray = (body, names) => {
+  for (const name of names) {
+    if (body[name] !== undefined) return toArray(body[name]);
+    const indexedFields = Object.keys(body)
+      .map(key => {
+        const match = key.match(/^(.+)\[(\d+)\]$/);
+        return match && match[1] === name ? { index: Number(match[2]), value: body[key] } : null;
+      })
+      .filter(Boolean)
+      .sort((a, b) => a.index - b.index);
+    if (indexedFields.length) return indexedFields.map(field => field.value);
+    if (body[`${name}[]`] !== undefined) return toArray(body[`${name}[]`]);
+  }
+  return [];
+};
+
 const parseMedicinesFromForm = (body) => {
-  const names = toArray(body.medicine_name || body['medicine_name[]'] || body.med_name || body['med_name[]']);
-  const dosages = toArray(body.medicine_dosage || body['medicine_dosage[]'] || body.med_dosage || body['med_dosage[]']);
-  const timings = toArray(body.medicine_timing || body['medicine_timing[]'] || body.med_frequency || body['med_frequency[]']);
-  const durations = toArray(body.medicine_duration || body['medicine_duration[]'] || body.med_duration || body['med_duration[]']);
-  const routes = toArray(body.med_route || body['med_route[]']);
-  const instructions = toArray(body.medicine_instructions || body['medicine_instructions[]'] || body.med_instructions || body['med_instructions[]']);
+  const names = getFormArray(body, ['medicine_name', 'med_name']);
+  const dosages = getFormArray(body, ['medicine_dosage', 'med_dosage']);
+  const unitsPerDose = getFormArray(body, ['medicine_units_per_dose', 'med_units_per_dose']);
+  const timings = getFormArray(body, ['medicine_timing', 'med_frequency']);
+  const durations = getFormArray(body, ['medicine_duration', 'med_duration']);
+  const routes = getFormArray(body, ['med_route']);
+  const instructions = getFormArray(body, ['medicine_instructions', 'med_instructions']);
+  const quantities = getFormArray(body, ['medicine_quantity', 'med_quantity']);
+  const quantitySources = getFormArray(body, ['medicine_quantity_source', 'med_quantity_source']);
 
   const medicines = [];
   for (let i = 0; i < names.length; i++) {
@@ -60,14 +84,17 @@ const parseMedicinesFromForm = (body) => {
     medicines.push({
       name,
       dosage: (dosages[i] || '').trim(),
+      units_per_dose: (unitsPerDose[i] || '').trim(),
       timing: (timings[i] || '').trim(),
       frequency: (timings[i] || '').trim(),
       duration: (durations[i] || '').trim(),
+      quantity: (quantities[i] || '').trim(),
+      quantity_source: (quantitySources[i] || '').trim(),
       route: (routes[i] || 'Oral').trim(),
       instructions: (instructions[i] || '').trim()
     });
   }
-  return medicines;
+  return normalizeExtractedMedicines(medicines);
 };
 
 router.get(['/doctor/prescription/:aid', '/doctor/prescription/create/:aid'], doctorRequired, async (req, res) => {
@@ -143,6 +170,7 @@ router.post(['/doctor/prescription/:aid', '/doctor/prescription/create/:aid'], d
     let doctor_notes = (f.doctor_notes || f.advice || '').trim();
     let followUp = f.follow_up_date || null;
     let medicines = parseMedicinesFromForm(f);
+    const doctorReviewedMedicines = medicines;
     const preferredLanguage = f.preferred_language || 'English';
 
     const hasFile = req.file;
@@ -163,6 +191,7 @@ router.post(['/doctor/prescription/:aid', '/doctor/prescription/create/:aid'], d
     let aiRaw = '';
     let aiStatus = 'success';
     let aiLang = preferredLanguage;
+    let recoveryPlan = createFallbackRecoveryPlan(medicines, diagnosis, doctor_notes, followUp);
 
     if (hasFile) {
       // Upload file to Cloudinary
@@ -174,11 +203,21 @@ router.post(['/doctor/prescription/:aid', '/doctor/prescription/create/:aid'], d
 
       // Re-read file path if saved locally by Multer temp for Tesseract OCR / AI
       const filePath = req.file.path;
-      const aiRes = await explainPrescriptionWithAi(filePath, req.file.mimetype, doctor_notes, preferredLanguage);
+      const aiRes = doctorReviewedMedicines.length > 0
+        ? await generateDigitalPrescriptionExplanation(
+          doctorReviewedMedicines,
+          diagnosis,
+          doctor_notes,
+          preferredLanguage,
+          followUp
+        )
+        : await explainPrescriptionWithAi(filePath, req.file.mimetype, doctor_notes, preferredLanguage);
 
       if (aiRes.success || aiRes.status === 'success') {
-        medicines = aiRes.medicines.length > 0 ? aiRes.medicines : medicines;
-        diagnosis = aiRes.diagnosis || diagnosis || 'Prescription Analysis';
+        medicines = doctorReviewedMedicines.length > 0
+          ? doctorReviewedMedicines
+          : (aiRes.medicines.length > 0 ? aiRes.medicines : medicines);
+        diagnosis = diagnosis || aiRes.diagnosis || '';
         const extractedNotes = aiRes.doctor_notes || '';
         if (doctor_notes && extractedNotes) {
           doctor_notes = `${doctor_notes}\n\nNotes from prescription file:\n${extractedNotes}`;
@@ -187,6 +226,7 @@ router.post(['/doctor/prescription/:aid', '/doctor/prescription/create/:aid'], d
         }
         followUp = followUp || aiRes.follow_up_date || null;
         aiExplanation = aiRes.explanation || '';
+        recoveryPlan = aiRes.recovery_plan || recoveryPlan;
         aiRaw = aiRes.raw_response || '';
         aiStatus = 'success';
         aiLang = aiRes.language || 'English';
@@ -209,12 +249,13 @@ router.post(['/doctor/prescription/:aid', '/doctor/prescription/create/:aid'], d
         }
         diagnosis = diagnosis || 'Prescription Scan';
         aiExplanation = aiRes.explanation || '';
+        recoveryPlan = aiRes.recovery_plan || recoveryPlan;
         aiRaw = aiRes.raw_response || '';
         aiStatus = 'fallback';
       }
     } else {
       // Digital prescription explanation
-      const aiRes = await generateDigitalPrescriptionExplanation(medicines, diagnosis, doctor_notes, preferredLanguage);
+      const aiRes = await generateDigitalPrescriptionExplanation(medicines, diagnosis, doctor_notes, preferredLanguage, followUp);
       aiExplanation = aiRes.explanation || '';
       aiRaw = aiRes.raw_response || '';
       aiStatus = aiRes.status || 'success';
@@ -262,6 +303,7 @@ router.post(['/doctor/prescription/:aid', '/doctor/prescription/create/:aid'], d
         ai_explanation_raw: aiRaw,
         ai_status: aiStatus,
         ai_language: aiLang,
+        recovery_plan: recoveryPlan,
         cds_warnings: cdsText
       }, { new: true });
     } else {
@@ -287,7 +329,8 @@ router.post(['/doctor/prescription/:aid', '/doctor/prescription/create/:aid'], d
         ai_explanation: aiExplanation,
         ai_explanation_raw: aiRaw,
         ai_status: aiStatus,
-        ai_language: aiLang
+        ai_language: aiLang,
+        recovery_plan: recoveryPlan
       });
       await rx.save();
     }
@@ -316,7 +359,7 @@ router.post(['/doctor/prescription/:aid', '/doctor/prescription/create/:aid'], d
 
     res.json({
       ok: true,
-      message: `Prescription ${rx.prescription_id} saved. PDF generated and emailed to patient.`,
+      message: `Prescription ${rx.prescription_id} saved and is available in the patient's dashboard.`,
       prescription: rx,
       warnings
     });
@@ -399,7 +442,15 @@ router.get('/prescriptions/:rx_id/', async (req, res) => {
       dname: rx.doctor_id.full_name,
       specialization: rx.doctor_id.specialization,
       pname: rx.patient_id.full_name,
-      pemail: rx.patient_id.email
+      pemail: rx.patient_id.email,
+      recovery_plan: Object.keys(rx.recovery_plan || {}).length
+        ? rx.recovery_plan
+        : createFallbackRecoveryPlan(
+          rx.medicines,
+          rx.diagnosis || rx.diagnosis_notes,
+          rx.doctor_notes || rx.advice,
+          rx.follow_up_date
+        )
     };
 
     res.json({
@@ -442,13 +493,20 @@ router.post('/doctor/prescription/regenerate/:rx_id', doctorRequired, async (req
       rx.medicines,
       rx.diagnosis || rx.diagnosis_notes || '',
       rx.doctor_notes || rx.advice || '',
-      preferredLanguage
+      preferredLanguage,
+      rx.follow_up_date || ''
     );
 
     rx.ai_explanation = aiRes.explanation || '';
     rx.ai_explanation_raw = aiRes.raw_response || '';
     rx.ai_status = aiRes.status || 'success';
     rx.ai_language = aiRes.language || 'English';
+    rx.recovery_plan = aiRes.recovery_plan || createFallbackRecoveryPlan(
+      rx.medicines,
+      rx.diagnosis || rx.diagnosis_notes,
+      rx.doctor_notes || rx.advice,
+      rx.follow_up_date
+    );
     await rx.save();
 
     // Re-generate PDF with the new AI translation
@@ -472,7 +530,8 @@ router.post('/doctor/prescription/regenerate/:rx_id', doctorRequired, async (req
       ok: true,
       explanation: rx.ai_explanation,
       status: rx.ai_status,
-      language: rx.ai_language
+      language: rx.ai_language,
+      recovery_plan: rx.recovery_plan
     });
   } catch (error) {
     res.status(500).json({ ok: false, error: error.message });
@@ -497,6 +556,33 @@ router.get('/doctor/prescriptions', doctorRequired, async (req, res) => {
   } catch (error) {
     console.error(error);
     res.status(500).json({ ok: false, error: 'Error loading prescriptions.' });
+  }
+});
+
+router.get('/patient/prescriptions', patientRequired, async (req, res) => {
+  const pid = req.session.patient_id;
+
+  try {
+    const prescriptions = await Prescription.find({ patient_id: pid })
+      .populate('doctor_id', 'full_name specialization profile_image')
+      .populate('appointment_id', 'appt_date time_slot appt_type')
+      .populate('family_member_id', 'name')
+      .sort({ created_at: -1 })
+      .lean();
+
+    res.json({
+      ok: true,
+      prescriptions: prescriptions.map(rx => ({
+        ...rx,
+        dname: rx.doctor_id?.full_name || 'Doctor',
+        specialization: rx.doctor_id?.specialization || '',
+        profile_image: rx.doctor_id?.profile_image || '/static/images/default_doctor.svg',
+        family_member_name: rx.family_member_id?.name || ''
+      }))
+    });
+  } catch (error) {
+    console.error('[Patient prescriptions] Failed to load history:', error);
+    res.status(500).json({ ok: false, error: 'Unable to load prescription history.' });
   }
 });
 
@@ -621,41 +707,27 @@ router.post('/prescription/ocr', doctorRequired, tempUpload.single('file'), asyn
     const preferredLanguage = req.body.preferred_language || 'English';
     const doctor_notes = req.body.doctor_notes || '';
     
-    // Call our multimodal AI vision analysis model
     const aiRes = await explainPrescriptionWithAi(req.file.path, req.file.mimetype, doctor_notes, preferredLanguage);
-
-    // Clean up temp file
-    try {
-      if (fs.existsSync(req.file.path)) {
-        fs.unlinkSync(req.file.path);
-      }
-    } catch (err) {
-      console.warn('[OCR] Failed to clean up temp file:', err.message);
-    }
-
-    if (aiRes.success || aiRes.status === 'success') {
-      res.json({
-        ok: true,
-        medicines: aiRes.medicines,
-        diagnosis: aiRes.diagnosis,
-        doctor_notes: aiRes.doctor_notes,
-        follow_up_date: aiRes.follow_up_date,
-        explanation: aiRes.explanation,
-        raw_text: aiRes.raw_text || aiRes.raw_response
-      });
-    } else {
-      // Local fallback OCR
-      const ocrService = require('../services/ocrService');
-      const result = await ocrService.extractMedicinesFromImage(req.file.path);
-      res.json({
-        ok: true,
-        medicines: result.medicines,
-        raw_text: result.raw_text
-      });
-    }
+    return res.json({
+      ok: true,
+      medicines: aiRes.medicines,
+      diagnosis: aiRes.diagnosis,
+      doctor_notes: aiRes.doctor_notes,
+      follow_up_date: aiRes.follow_up_date,
+      explanation: aiRes.explanation,
+      recovery_plan: aiRes.recovery_plan,
+      raw_text: aiRes.raw_text || aiRes.raw_response,
+      extraction_status: aiRes.status
+    });
   } catch (error) {
     console.error('[OCR ERROR]', error);
     res.status(500).json({ ok: false, error: `OCR process failed: ${error.message}` });
+  } finally {
+    try {
+      if (fs.existsSync(req.file.path)) fs.unlinkSync(req.file.path);
+    } catch (cleanupError) {
+      console.warn('[OCR] Failed to clean up temporary upload:', cleanupError.message);
+    }
   }
 });
 
@@ -683,13 +755,20 @@ router.post('/patient/prescription/translate/:rx_id', patientRequired, async (re
       rx.medicines,
       rx.diagnosis || rx.diagnosis_notes || '',
       rx.doctor_notes || rx.advice || '',
-      preferredLanguage
+      preferredLanguage,
+      rx.follow_up_date || ''
     );
 
     rx.ai_explanation = aiRes.explanation || '';
     rx.ai_explanation_raw = aiRes.raw_response || '';
     rx.ai_status = aiRes.status || 'success';
     rx.ai_language = aiRes.language || 'English';
+    rx.recovery_plan = aiRes.recovery_plan || createFallbackRecoveryPlan(
+      rx.medicines,
+      rx.diagnosis || rx.diagnosis_notes,
+      rx.doctor_notes || rx.advice,
+      rx.follow_up_date
+    );
     await rx.save();
 
     // Re-generate PDF with the new AI translation
@@ -708,7 +787,13 @@ router.post('/patient/prescription/translate/:rx_id', patientRequired, async (re
       await rx.save();
     }
 
-    res.json({ ok: true, explanation: rx.ai_explanation, status: rx.ai_status, language: rx.ai_language });
+    res.json({
+      ok: true,
+      explanation: rx.ai_explanation,
+      status: rx.ai_status,
+      language: rx.ai_language,
+      recovery_plan: rx.recovery_plan
+    });
   } catch (error) {
     console.error(error);
     res.status(500).json({ ok: false, error: 'Error translating prescription summary.' });

@@ -35,6 +35,7 @@ import VisitPrep from './pages/VisitPrep';
 import DoctorPrepSheet from './pages/DoctorPrepSheet';
 import WritePrescription from './pages/WritePrescription';
 import PrescriptionDetail from './pages/PrescriptionDetail';
+import MyPrescriptions from './pages/MyPrescriptions';
 import DoctorPatients from './pages/DoctorPatients';
 import DoctorPatientRecords from './pages/DoctorPatientRecords';
 import DoctorAnalytics from './pages/DoctorAnalytics';
@@ -64,6 +65,14 @@ function App() {
                     <Dashboard />
                   </ProtectedRoute>
                 } 
+              />
+              <Route
+                path="/my-prescriptions"
+                element={
+                  <ProtectedRoute allowedRoles={['patient']}>
+                    <MyPrescriptions />
+                  </ProtectedRoute>
+                }
               />
               <Route 
                 path="/profile" 

@@ -52,7 +52,8 @@ const PrescriptionDetail = () => {
             ...prev.rx,
             ai_explanation: res.data.explanation,
             ai_status: res.data.status,
-            ai_language: res.data.language
+            ai_language: res.data.language,
+            recovery_plan: res.data.recovery_plan
           }
         }));
         alert(is_doctor_view ? 'AI Explanation successfully regenerated and updated!' : 'AI Explanation successfully translated!');
@@ -87,6 +88,15 @@ const PrescriptionDetail = () => {
   }
 
   const { rx, medicines = [], reminders = [], is_doctor_view } = data || {};
+  const recoveryPlan = data?.recovery_plan || rx?.recovery_plan || {};
+  const recoverySections = [
+    { title: 'What to do today', icon: '✅', items: recoveryPlan.today },
+    { title: 'Over the next few days', icon: '📅', items: recoveryPlan.next_days },
+    { title: 'Food and fluids', icon: '🥗', items: recoveryPlan.food },
+    { title: 'Rest and activity', icon: '🛌', items: recoveryPlan.rest },
+    { title: 'When to get help', icon: '🚨', items: recoveryPlan.watch_for },
+    { title: 'Follow-up', icon: '🩺', items: recoveryPlan.follow_up },
+  ];
 
   return (
     <>
@@ -169,6 +179,7 @@ const PrescriptionDetail = () => {
                     <th style={{ textAlign: 'left', padding: '12px 16px', color: 'white', fontWeight: 700 }}>Dosage</th>
                     <th style={{ textAlign: 'left', padding: '12px 16px', color: 'white', fontWeight: 700 }}>Timing</th>
                     <th style={{ textAlign: 'left', padding: '12px 16px', color: 'white', fontWeight: 700 }}>Duration</th>
+                    <th style={{ textAlign: 'left', padding: '12px 16px', color: 'white', fontWeight: 700 }}>Quantity</th>
                   </tr>
                 </thead>
                 <tbody>
@@ -177,14 +188,22 @@ const PrescriptionDetail = () => {
                       <tr key={idx} style={{ borderBottom: '1px solid var(--border)', backgroundColor: idx % 2 === 1 ? '#f8fafc' : 'white' }}>
                         <td style={{ padding: '12px 16px', color: 'var(--text-muted)' }}>{idx + 1}</td>
                         <td style={{ padding: '12px 16px', fontWeight: 700, color: 'var(--text)' }}>{m.name}</td>
-                        <td style={{ padding: '12px 16px' }}>{m.dosage || '—'}</td>
+                        <td style={{ padding: '12px 16px' }}>
+                          {[m.dosage, m.units_per_dose].filter(Boolean).join(' · ') || '—'}
+                        </td>
                         <td style={{ padding: '12px 16px' }}>{m.timing || m.frequency || '—'}</td>
                         <td style={{ padding: '12px 16px' }}>{m.duration || '—'}</td>
+                        <td style={{ padding: '12px 16px' }}>
+                          {m.quantity || 'Not specified'}
+                          {m.quantity_source === 'calculated' && (
+                            <span style={{ display: 'block', color: '#92400e', fontSize: '0.72rem' }}>Estimated — verify</span>
+                          )}
+                        </td>
                       </tr>
                     ))
                   ) : (
                     <tr>
-                      <td colSpan="5" className="text-muted" style={{ padding: '16px', textAlign: 'center' }}>No medicines listed.</td>
+                      <td colSpan="6" className="text-muted" style={{ padding: '16px', textAlign: 'center' }}>No medicines listed.</td>
                     </tr>
                   )}
                 </tbody>
@@ -207,12 +226,12 @@ const PrescriptionDetail = () => {
                 <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '12px', marginBottom: '16px', borderBottom: '1px solid rgba(0, 0, 0, 0.06)', paddingBottom: '12px' }}>
                   <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
                     <span style={{ fontSize: '1.5rem', background: '#e0e7ff', color: '#4f46e5', padding: '6px 10px', borderRadius: '50%' }}>🤖</span>
-                    <h3 style={{ margin: 0, color: '#4f46e5', fontSize: '1.15rem', fontWeight: 700 }}>AI Clinical Explanation & Guidance</h3>
+                    <h3 style={{ margin: 0, color: '#4f46e5', fontSize: '1.15rem', fontWeight: 700 }}>Your Prescription & Recovery Plan</h3>
                   </div>
                   <div>
                     {rx?.ai_explanation ? (
                       <span className="status-badge" style={{ backgroundColor: rx.ai_status === 'success' ? '#ecfdf5' : '#fffbeb', color: rx.ai_status === 'success' ? '#065f46' : '#92400e', border: `1px solid ${rx.ai_status === 'success' ? '#a7f3d0' : '#fef3c7'}`, fontSize: '0.78rem', padding: '4px 10px', borderRadius: '12px', fontWeight: 600 }}>
-                        {rx.ai_status === 'success' ? '🟢 AI Explanation Active' : 'ℹ️ Basic Explanation Active'} ({rx.ai_language || 'English'})
+                        {rx.ai_status === 'success' ? '🟢 Recovery guide' : 'ℹ️ Prescription guide'} ({rx.ai_language || 'English'})
                       </span>
                     ) : (
                       <span className="status-badge" style={{ backgroundColor: '#f3f4f6', color: '#374151', border: '1px solid #d1d5db', fontSize: '0.78rem', padding: '4px 10px', borderRadius: '12px', fontWeight: 600 }}>
@@ -222,11 +241,42 @@ const PrescriptionDetail = () => {
                   </div>
                 </div>
 
-                <div 
-                  className="ai-explanation-content" 
-                  style={{ fontSize: '0.92rem', lineHeight: '1.6', color: '#374151' }}
-                  dangerouslySetInnerHTML={{ __html: rx?.ai_explanation || '<p style="color:var(--text-muted); font-style:italic;">No detailed explanation has been generated yet for this prescription.</p>' }}
-                />
+                <p style={{ margin: '0 0 18px', color: 'var(--text-muted)', fontSize: '0.88rem' }}>
+                  A practical guide based on the prescription and doctor’s notes. Follow the verified pharmacy label if anything differs.
+                </p>
+
+                {recoveryPlan.medicine_guidance?.length > 0 && (
+                  <div style={{ marginBottom: '18px' }}>
+                    <h4 style={{ color: '#1e1b4b', fontSize: '1rem', margin: '0 0 10px' }}>Medicine guide</h4>
+                    <div style={{ display: 'grid', gap: '10px' }}>
+                      {recoveryPlan.medicine_guidance.map((medicine, index) => (
+                        <div key={`${medicine.name}-${index}`} style={{ background: '#fff', border: '1px solid #e0e7ff', borderRadius: '12px', padding: '14px' }}>
+                          <strong style={{ color: '#312e81' }}>💊 {medicine.name}</strong>
+                          {medicine.purpose && <p style={{ margin: '5px 0', fontSize: '0.86rem' }}>{medicine.purpose}</p>}
+                          {medicine.how_to_take && <p style={{ margin: '5px 0', fontSize: '0.86rem' }}><strong>How to take:</strong> {medicine.how_to_take}</p>}
+                          {medicine.caution && <p style={{ margin: '5px 0 0', color: '#92400e', fontSize: '0.83rem' }}><strong>Quantity / check:</strong> {medicine.caution}</p>}
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                )}
+
+                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(230px, 1fr))', gap: '12px' }}>
+                  {recoverySections.filter(section => section.items?.length > 0).map(section => (
+                    <section key={section.title} style={{ background: '#fff', border: '1px solid rgba(15, 23, 42, 0.08)', borderRadius: '12px', padding: '14px' }}>
+                      <h4 style={{ color: '#312e81', fontSize: '0.92rem', margin: '0 0 8px' }}>{section.icon} {section.title}</h4>
+                      <ul style={{ margin: 0, paddingLeft: '18px', fontSize: '0.84rem', lineHeight: 1.55, color: '#374151' }}>
+                        {section.items.map((item, index) => <li key={`${section.title}-${index}`} style={{ marginBottom: '5px' }}>{item}</li>)}
+                      </ul>
+                    </section>
+                  ))}
+                </div>
+
+                {recoveryPlan.disclaimer && (
+                  <p style={{ margin: '18px 0 0', borderTop: '1px solid rgba(0, 0, 0, 0.06)', paddingTop: '12px', color: 'var(--text-muted)', fontSize: '0.78rem' }}>
+                    {recoveryPlan.disclaimer}
+                  </p>
+                )}
 
                 {/* CDS warnings */}
                 {rx?.cds_warnings && (

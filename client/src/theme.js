@@ -92,20 +92,38 @@ const theme = createTheme({
         }
       },
     },
-    MuiTextField: {
+    MuiOutlinedInput: {
       styleOverrides: {
         root: {
-          '& .MuiOutlinedInput-root': {
-            borderRadius: 12,
-            transition: 'all 0.2s ease',
-            '&:hover .MuiOutlinedInput-notchedOutline': {
-              borderColor: '#4f46e5',
-            },
-            '&.Mui-focused .MuiOutlinedInput-notchedOutline': {
-              borderColor: '#4f46e5',
-              borderWidth: '2px',
-            }
+          borderRadius: 20,
+          transition: 'border-color 300ms ease, box-shadow 300ms ease',
+          '& .MuiOutlinedInput-notchedOutline': {
+            transition: 'border-color 300ms ease, border-width 300ms ease',
+          },
+          '&:hover .MuiOutlinedInput-notchedOutline': {
+            borderColor: 'rgb(200, 200, 200)',
+          },
+          '&.Mui-focused': {
+            boxShadow: '0 0 0 3px rgba(150, 150, 200, 0.14)',
+          },
+          '&.Mui-focused .MuiOutlinedInput-notchedOutline': {
+            borderColor: 'rgb(150, 150, 200)',
+            borderWidth: '2px',
           }
+        },
+      },
+    },
+    MuiInputLabel: {
+      styleOverrides: {
+        root: {
+          transition: 'color 300ms ease, transform 300ms ease, background-color 300ms ease',
+        },
+        outlined: {
+          '&.MuiInputLabel-shrink': {
+            padding: '0 6px',
+            borderRadius: 4,
+            backgroundColor: '#fff',
+          },
         },
       },
     },

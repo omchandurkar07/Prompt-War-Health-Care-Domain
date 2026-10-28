@@ -119,11 +119,31 @@ const Dashboard = () => {
   const handlePayAppointment = async (appt) => {
     setPaymentBusy(appt._id);
     try {
-      const loaded = await loadRazorpay();
-      if (!loaded) throw new Error('Razorpay Checkout could not be loaded. Check your connection and try again.');
-
       const orderRes = await axios.post(`/api/payments/order/${appt._id}`);
       if (!orderRes.data?.ok) throw new Error(orderRes.data?.error || 'Unable to start checkout.');
+
+      if (orderRes.data.payment_mode === 'simulation') {
+        const amount = (orderRes.data.amount / 100).toFixed(2);
+        const confirmed = window.confirm(
+          `DEMO PAYMENT ONLY\n\nThis simulates a payment of ₹${amount}. No real payment will be taken.\n\nContinue?`
+        );
+        if (!confirmed) {
+          setPaymentBusy('');
+          return;
+        }
+
+        const simulationRes = await axios.post(`/api/payments/simulate/${appt._id}`);
+        if (!simulationRes.data?.ok) {
+          throw new Error(simulationRes.data?.error || 'Unable to complete demo payment.');
+        }
+        alert(simulationRes.data.message || 'Demo payment recorded. No money was charged.');
+        await Promise.all([fetchDashboardData(), fetchPaymentHistory()]);
+        setPaymentBusy('');
+        return;
+      }
+
+      const loaded = await loadRazorpay();
+      if (!loaded) throw new Error('Razorpay Checkout could not be loaded. Check your connection and try again.');
 
       const checkout = new window.Razorpay({
         key: orderRes.data.key_id,
@@ -132,7 +152,7 @@ const Dashboard = () => {
         name: 'UltraCare',
         description: `Consultation with Dr. ${appt.doctor_id?.full_name || 'your doctor'}`,
         order_id: orderRes.data.order_id,
-        prefill: { name: patient?.full_name || '', email: patient?.email || '' },
+        prefill: { name: user?.full_name || '', email: user?.email || '' },
         notes: { appointment_id: appt._id },
         theme: { color: '#0f766e' },
         handler: async (gatewayResponse) => {
@@ -306,7 +326,9 @@ const Dashboard = () => {
                       <div style={{ color: 'var(--text-muted)', fontSize: '0.78rem', textTransform: 'capitalize' }}>
                         {payment.refund_status !== 'none'
                           ? `Refund ${payment.refund_status}`
-                          : payment.status}
+                          : payment.payment_mode === 'simulation' && payment.status === 'paid'
+                            ? 'Demo payment — not charged'
+                            : payment.status}
                       </div>
                     </div>
                   </div>
@@ -341,6 +363,38 @@ const Dashboard = () => {
                         </>
                       )}
                     </div>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+
+          <div className="glass" style={{ padding: '24px', marginTop: '24px' }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: '12px', flexWrap: 'wrap', marginBottom: '16px' }}>
+              <div>
+                <h3 style={{ fontSize: '1.15rem', fontWeight: 700, margin: 0 }}>💊 Recent Prescriptions</h3>
+                <span style={{ color: 'var(--text-muted)', fontSize: '0.8rem' }}>{stats?.prescriptions || 0} in your prescription history</span>
+              </div>
+              <Link to="/my-prescriptions" className="btn btn-outline btn-sm">View all prescriptions →</Link>
+            </div>
+            {prescriptions.length === 0 ? (
+              <div style={{ textAlign: 'center', padding: '18px 10px', color: 'var(--text-muted)' }}>
+                <p style={{ margin: 0, fontSize: '0.9rem' }}>When your doctor issues a prescription, it will appear here and be saved in your account.</p>
+              </div>
+            ) : (
+              <div style={{ display: 'grid', gap: '10px' }}>
+                {prescriptions.slice(0, 4).map((rx) => (
+                  <div key={rx._id} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: '12px', flexWrap: 'wrap', padding: '12px', border: '1px solid var(--border)', borderRadius: '12px', background: 'rgba(255,255,255,0.65)' }}>
+                    <div>
+                      <strong style={{ display: 'block' }}>{rx.dname?.startsWith('Dr.') ? rx.dname : `Dr. ${rx.dname || 'Doctor'}`}</strong>
+                      <span style={{ fontSize: '0.78rem', color: 'var(--text-muted)' }}>
+                        {rx.prescription_id} · {new Date(rx.created_at).toLocaleDateString()}
+                      </span>
+                      <span style={{ display: 'block', fontSize: '0.82rem', marginTop: '3px' }}>
+                        {rx.diagnosis || rx.diagnosis_notes || 'Prescription'} · {(rx.medicines || []).length} medicine(s)
+                      </span>
+                    </div>
+                    <Link to={`/prescriptions/${rx._id}`} className="btn btn-primary btn-sm">Open</Link>
                   </div>
                 ))}
               </div>

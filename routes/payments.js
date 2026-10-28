@@ -5,6 +5,7 @@ const Payment = require('../models/Payment');
 const Notification = require('../models/Notification');
 const { patientRequired, adminRequired } = require('../middleware/auth');
 const {
+  getPaymentMode,
   getRazorpayClient,
   verifyPaymentSignature,
   verifyWebhookSignature
@@ -56,16 +57,26 @@ const handleAppointmentCancellation = async (req, res) => {
     }
 
     const payment = await Payment.findOne({ appointment_id: appointment._id, patient_id: req.session.patient_id });
+    const wasPaid = payment?.status === 'paid';
     if (payment?.status === 'paid') {
-      if (payment.refund_status !== 'none') {
-        return res.status(409).json({ ok: false, error: 'A refund request already exists for this appointment.' });
+      if (payment.payment_mode === 'simulation') {
+        payment.status = 'refunded';
+        payment.refund_status = 'processed';
+        payment.refund_note = 'Demo payment voided; no money was charged.';
+        payment.updated_at = new Date();
+        await payment.save();
+        appointment.payment_status = 'refunded';
+      } else {
+        if (payment.refund_status !== 'none') {
+          return res.status(409).json({ ok: false, error: 'A refund request already exists for this appointment.' });
+        }
+        payment.refund_status = 'requested';
+        payment.refund_requested_at = new Date();
+        payment.refund_note = 'Patient requested cancellation and refund.';
+        payment.updated_at = new Date();
+        await payment.save();
+        appointment.payment_status = 'refund_requested';
       }
-      payment.refund_status = 'requested';
-      payment.refund_requested_at = new Date();
-      payment.refund_note = 'Patient requested cancellation and refund.';
-      payment.updated_at = new Date();
-      await payment.save();
-      appointment.payment_status = 'refund_requested';
     } else if (payment && ['created', 'creating'].includes(payment.status)) {
       payment.status = 'failed';
       payment.updated_at = new Date();
@@ -86,8 +97,10 @@ const handleAppointmentCancellation = async (req, res) => {
 
     res.json({
       ok: true,
-      message: payment?.status === 'paid'
-        ? 'Appointment cancelled. Your refund request is waiting for administrator review.'
+      message: wasPaid
+        ? payment.payment_mode === 'simulation'
+          ? 'Appointment cancelled. The demo payment was voided; no money was charged.'
+          : 'Appointment cancelled. Your refund request is waiting for administrator review.'
         : 'Appointment cancelled.'
     });
   } catch (error) {
@@ -100,10 +113,17 @@ router.post('/appointment/cancel/:aid', patientRequired, handleAppointmentCancel
 router.post('/payments/refund-request/:aid', patientRequired, handleAppointmentCancellation);
 
 router.get('/payments/config', patientRequired, (req, res) => {
-  if (!process.env.RAZORPAY_KEY_ID || !process.env.RAZORPAY_KEY_SECRET) {
-    return res.status(503).json({ ok: false, error: 'Online payments are not configured.' });
+  try {
+    const mode = getPaymentMode();
+    return res.json({
+      ok: true,
+      payment_mode: mode,
+      currency: 'INR',
+      ...(mode === 'razorpay' ? { key_id: process.env.RAZORPAY_KEY_ID } : {})
+    });
+  } catch (error) {
+    return res.status(error.status || 503).json({ ok: false, error: error.message });
   }
-  res.json({ ok: true, key_id: process.env.RAZORPAY_KEY_ID, currency: 'INR' });
 });
 
 router.get('/payments/history', patientRequired, async (req, res) => {
@@ -139,17 +159,8 @@ router.post('/payments/order/:aid', patientRequired, async (req, res) => {
       return res.status(400).json({ ok: false, error: 'This appointment does not have a payable fee.' });
     }
 
-    const razorpay = getRazorpayClient();
+    const paymentMode = getPaymentMode();
     let payment = await Payment.findOne({ appointment_id: appointment._id });
-    if (payment?.status === 'created' && payment.razorpay_order_id) {
-      return res.json({
-        ok: true,
-        key_id: process.env.RAZORPAY_KEY_ID,
-        order_id: payment.razorpay_order_id,
-        amount: payment.amount_paise,
-        currency: payment.currency
-      });
-    }
     if (payment?.status === 'paid') {
       return res.status(409).json({ ok: false, error: 'This appointment is already paid.' });
     }
@@ -157,10 +168,80 @@ router.post('/payments/order/:aid', patientRequired, async (req, res) => {
       return res.status(409).json({ ok: false, error: 'A refund request is already being reviewed.' });
     }
 
+    if (paymentMode === 'simulation') {
+      if (payment?.status === 'created' && payment.payment_mode === 'simulation') {
+        return res.json({
+          ok: true,
+          payment_mode: 'simulation',
+          amount: payment.amount_paise,
+          currency: payment.currency
+        });
+      }
+      if (payment?.status === 'created') {
+        return res.status(409).json({ ok: false, error: 'A payment using a different method is already in progress.' });
+      }
+      if (payment) {
+        const locked = await Payment.findOneAndUpdate(
+          { _id: payment._id, status: { $in: ['pending', 'failed'] } },
+          { $set: { status: 'creating', payment_mode: 'simulation', amount_paise: amountPaise, updated_at: new Date() } },
+          { new: true }
+        );
+        if (!locked) return res.status(409).json({ ok: false, error: 'Payment setup is already in progress. Try again shortly.' });
+        payment = locked;
+      } else {
+        try {
+          payment = await Payment.create({
+            appointment_id: appointment._id,
+            patient_id: appointment.patient_id,
+            doctor_id: appointment.doctor_id,
+            amount_paise: amountPaise,
+            payment_mode: 'simulation',
+            status: 'creating'
+          });
+        } catch (error) {
+          if (error.code === 11000) {
+            return res.status(409).json({ ok: false, error: 'Payment setup is already in progress. Try again shortly.' });
+          }
+          throw error;
+        }
+      }
+
+      payment.status = 'created';
+      payment.amount_paise = amountPaise;
+      payment.payment_mode = 'simulation';
+      payment.updated_at = new Date();
+      await payment.save();
+      return res.json({
+        ok: true,
+        payment_mode: 'simulation',
+        amount: amountPaise,
+        currency: payment.currency,
+        message: 'Demo payment only. No money will be charged.'
+      });
+    }
+
+    if (payment?.status === 'created' && payment.razorpay_order_id) {
+      return res.json({
+        ok: true,
+        payment_mode: 'razorpay',
+        key_id: process.env.RAZORPAY_KEY_ID,
+        order_id: payment.razorpay_order_id,
+        amount: payment.amount_paise,
+        currency: payment.currency
+      });
+    }
+    const razorpay = getRazorpayClient();
+
     if (payment) {
       const locked = await Payment.findOneAndUpdate(
-        { _id: payment._id, status: { $in: ['pending', 'failed'] } },
-        { $set: { status: 'creating', amount_paise: amountPaise, updated_at: new Date() } },
+        {
+          _id: payment._id,
+          $or: [
+            { status: { $in: ['pending', 'failed'] } },
+            { status: 'created', payment_mode: 'simulation' }
+          ]
+        },
+        { $set: { status: 'creating', payment_mode: 'razorpay', amount_paise: amountPaise, updated_at: new Date() } },
         { new: true }
       );
       if (!locked) return res.status(409).json({ ok: false, error: 'Payment setup is already in progress. Try again shortly.' });
@@ -172,6 +253,7 @@ router.post('/payments/order/:aid', patientRequired, async (req, res) => {
           patient_id: appointment.patient_id,
           doctor_id: appointment.doctor_id,
           amount_paise: amountPaise,
+          payment_mode: 'razorpay',
           status: 'creating'
         });
       } catch (error) {
@@ -199,6 +281,7 @@ router.post('/payments/order/:aid', patientRequired, async (req, res) => {
 
       res.json({
         ok: true,
+        payment_mode: 'razorpay',
         key_id: process.env.RAZORPAY_KEY_ID,
         order_id: order.id,
         amount: amountPaise,
@@ -216,6 +299,63 @@ router.post('/payments/order/:aid', patientRequired, async (req, res) => {
   }
 });
 
+router.post('/payments/simulate/:aid', patientRequired, async (req, res) => {
+  const { aid } = req.params;
+  if (!isObjectId(aid)) return res.status(404).json({ ok: false, error: 'Appointment not found.' });
+
+  try {
+    if (getPaymentMode() !== 'simulation') {
+      return res.status(409).json({ ok: false, error: 'Simulation payments are only available when Razorpay is not configured.' });
+    }
+
+    const appointment = await Appointment.findOne({
+      _id: aid,
+      patient_id: req.session.patient_id,
+      status: 'confirmed'
+    });
+    if (!appointment) {
+      return res.status(404).json({ ok: false, error: 'Confirmed appointment not found.' });
+    }
+    if (appointment.payment_status === 'completed') {
+      return res.status(409).json({ ok: false, error: 'This appointment is already paid.' });
+    }
+
+    const amountPaise = Math.round(Number(appointment.fee) * 100);
+    if (!Number.isSafeInteger(amountPaise) || amountPaise <= 0) {
+      return res.status(400).json({ ok: false, error: 'This appointment does not have a payable fee.' });
+    }
+
+    const payment = await Payment.findOneAndUpdate(
+      {
+        appointment_id: appointment._id,
+        patient_id: req.session.patient_id,
+        payment_mode: 'simulation',
+        status: 'created',
+        amount_paise: amountPaise
+      },
+      { $set: { status: 'paid', paid_at: new Date(), updated_at: new Date() } },
+      { new: true }
+    );
+    if (!payment) {
+      return res.status(409).json({ ok: false, error: 'Demo payment session expired. Start the payment again.' });
+    }
+
+    appointment.payment_status = 'completed';
+    appointment.updated_at = new Date();
+    await appointment.save();
+
+    return res.json({
+      ok: true,
+      status: 'paid',
+      payment_mode: 'simulation',
+      message: 'Demo payment recorded. No money was charged.'
+    });
+  } catch (error) {
+    console.error('[PAYMENT] Simulation failed:', error.message || error);
+    res.status(error.status || 500).json({ ok: false, error: error.status ? error.message : 'Unable to complete demo payment.' });
+  }
+});
+
 router.post('/payments/verify/:aid', patientRequired, async (req, res) => {
   const { aid } = req.params;
   const { razorpay_order_id: orderId, razorpay_payment_id: paymentId, razorpay_signature: signature } = req.body;
@@ -224,6 +364,9 @@ router.post('/payments/verify/:aid', patientRequired, async (req, res) => {
   }
 
   try {
+    if (getPaymentMode() !== 'razorpay') {
+      return res.status(409).json({ ok: false, error: 'Razorpay verification is unavailable in simulation mode.' });
+    }
     const payment = await Payment.findOne({
       appointment_id: aid,
       patient_id: req.session.patient_id,
@@ -291,6 +434,24 @@ router.post('/admin/payment-refunds/:paymentId/decision', adminRequired, async (
       if (!payment) return res.status(409).json({ ok: false, error: 'This refund request is no longer pending.' });
       await Appointment.updateOne({ _id: payment.appointment_id }, { $set: { payment_status: 'completed' } });
       return res.json({ ok: true, status: 'rejected' });
+    }
+
+    const simulatedPayment = await Payment.findOne({
+      _id: paymentId,
+      payment_mode: 'simulation',
+      status: 'paid',
+      refund_status: { $in: ['requested', 'failed'] }
+    });
+    if (simulatedPayment) {
+      simulatedPayment.status = 'refunded';
+      simulatedPayment.refund_status = 'processed';
+      simulatedPayment.refund_decided_at = new Date();
+      simulatedPayment.refund_decided_by = req.session.admin_id;
+      simulatedPayment.refund_note = String(note || 'Demo payment voided; no money was charged.').slice(0, 500);
+      simulatedPayment.updated_at = new Date();
+      await simulatedPayment.save();
+      await Appointment.updateOne({ _id: simulatedPayment.appointment_id }, { $set: { payment_status: 'refunded' } });
+      return res.json({ ok: true, status: 'processed', payment_mode: 'simulation' });
     }
 
     let razorpay;

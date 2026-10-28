@@ -1,5 +1,6 @@
 const Tesseract = require('tesseract.js');
 const fs = require('fs');
+const { normalizeExtractedMedicines } = require('./prescriptionExtraction');
 
 const extractMedicinesFromImage = async (filePath) => {
   const result = { raw_text: '', medicines: [], ocr_available: false };
@@ -22,50 +23,63 @@ const extractMedicinesFromImage = async (filePath) => {
 
 const parseLines = (text) => {
   const medicines = [];
-  const dosageRegex = /\b(\d+\s*(?:mg|ml|mcg|g|tablet|tab|cap)s?)\b/i;
-  const timingKeywords = ['morning', 'afternoon', 'evening', 'night', 'bd', 'tds', 'after food', 'before food'];
+  const strengthRegex = /\b\d+(?:\.\d+)?\s*(?:mg|mcg|g|IU|%|units?)\b|\b\d+(?:\.\d+)?\s*\/\s*\d+(?:\.\d+)?\b/i;
+  const unitsPerDoseRegex = /\b\d+(?:\.\d+)?\s*(?:tablets?|tabs?|capsules?|caps?|pills?|ml|mL)\b/i;
+  const scheduleRegex = /\b(?:\d\s*[-–]\s*\d\s*[-–]\s*\d(?:\s*[-–]\s*\d)?|Q\s*\d+\s*H|OD|QD|BD|BID|TDS|TID|QID|QDS|SOS|PRN)\b/i;
+  const frequencyRegex = /\b(?:once|twice|thrice|three|four)\s+(?:a|per)?\s*day\b|\bevery\s+\d+\s+hours?\b/i;
+  const durationRegex = /\b\d+\s*(?:days?|d\b|weeks?|months?)\b/i;
+  const quantityRegex = /\b(?:qty|quantity)\s*[:=-]?\s*#?\s*(\d+(?:\.\d+)?\s*(?:tablets?|tabs?|capsules?|caps?|pills?|ml|mL|bottles?|sachets?)?)\b|#\s*(\d+(?:\.\d+)?)\b/i;
+  const metadataRegex = /^(?:dr\.?|doctor|patient|name|age|date|rx|diagnosis|assessment|advice|instructions?|follow.?up|signature|phone|address|hospital)\b/i;
+  const irrelevantRegex = /\b(?:take with|after food|before food|after meals?|before meals?|morning|afternoon|evening|night|bedtime|daily|once daily|twice daily|thrice daily|three times|four times|every \d+ hours?|for \d+ days?)\b/i;
 
-  const lines = text.split('\n');
-  for (let line of lines) {
-    line = line.trim();
-    if (line.length < 3) continue;
+  for (const rawLine of text.split(/\r?\n/)) {
+    const line = rawLine.replace(/\s+/g, ' ').trim();
+    if (line.length < 3 || metadataRegex.test(line)) continue;
 
-    // Filter headers/clinical metadata
-    if (/^(dr\.?|doctor|patient|date|rx)\b/i.test(line)) continue;
+    const strength = line.match(strengthRegex)?.[0] || '';
+    const unitsPerDose = line.match(unitsPerDoseRegex)?.[0] || '';
+    const schedule = line.match(scheduleRegex)?.[0] || line.match(frequencyRegex)?.[0] || '';
+    const duration = line.match(durationRegex)?.[0] || '';
+    const quantityMatch = line.match(quantityRegex);
+    const quantity = quantityMatch?.[1] || quantityMatch?.[2] || '';
+    const medicineLine = line.replace(/^\s*(?:syp|syrup)\.?\s+/i, '');
 
-    const dm = line.match(dosageRegex);
-    const dosage = dm ? dm[1] : '';
+    if (!strength && !unitsPerDose && !schedule && !duration && !quantity) continue;
 
-    const timingList = [];
-    const lowerLine = line.toLowerCase();
-    timingKeywords.forEach(kw => {
-      if (lowerLine.includes(kw)) {
-        timingList.push(kw);
-      }
-    });
-    const timing = timingList.join(', ').substring(0, 120);
+    let name = medicineLine
+      .replace(strengthRegex, ' ')
+      .replace(unitsPerDoseRegex, ' ')
+      .replace(scheduleRegex, ' ')
+      .replace(frequencyRegex, ' ')
+      .replace(durationRegex, ' ')
+      .replace(quantityRegex, ' ')
+      .replace(/\b(?:tab(?:let)?s?|cap(?:sule)?s?|oral|po|after food|before food|once|twice|thrice|daily|bd|bid|tds|tid|qid|qds|sos|prn|q\s*\d+\s*h)\b/gi, ' ')
+      .replace(/\bx\b/gi, ' ')
+      .replace(/[0-9#]+/g, ' ')
+      .replace(/[×/,:;|()[\]{}]+/g, ' ')
+      .replace(/\s+/g, ' ')
+      .trim();
 
-    let name = line;
-    if (dm) {
-      const idx = line.indexOf(dm[1]);
-      name = line.substring(0, idx).replace(/[-:,]+$/, '').trim();
-    }
-    if (name.length < 2) continue;
+    if (name.length < 2 || irrelevantRegex.test(name)) continue;
 
     medicines.push({
       name: name.substring(0, 120),
-      dosage: dosage.substring(0, 80),
-      timing: timing,
-      duration: '',
-      frequency: timing,
-      route: 'Oral',
-      instructions: ''
+      dosage: strength,
+      units_per_dose: unitsPerDose.replace(/\s+/g, ' '),
+      timing: schedule,
+      frequency: schedule,
+      duration: duration.replace(/\s*d$/i, ' days'),
+      quantity,
+      route: '',
+      instructions: '',
+      confidence: 'low'
     });
   }
 
-  return medicines.slice(0, 15);
+  return normalizeExtractedMedicines(medicines).slice(0, 15);
 };
 
 module.exports = {
-  extractMedicinesFromImage
+  extractMedicinesFromImage,
+  parseLines
 };

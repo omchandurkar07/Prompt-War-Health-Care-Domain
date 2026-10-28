@@ -11,6 +11,7 @@ const PaymentSchema = new mongoose.Schema({
   doctor_id: { type: mongoose.Schema.Types.ObjectId, ref: 'Doctor', required: true },
   amount_paise: { type: Number, required: true, min: 1 },
   currency: { type: String, default: 'INR', enum: ['INR'] },
+  payment_mode: { type: String, enum: ['razorpay', 'simulation'], default: 'razorpay' },
   status: {
     type: String,
     enum: ['pending', 'creating', 'created', 'paid', 'failed', 'refunded'],

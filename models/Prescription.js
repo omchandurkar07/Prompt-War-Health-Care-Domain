@@ -3,9 +3,13 @@ const mongoose = require('mongoose');
 const MedicineSchema = new mongoose.Schema({
   name: { type: String, required: true },
   dosage: { type: String, default: '' },
+  units_per_dose: { type: String, default: '' },
   timing: { type: String, default: '' },
   frequency: { type: String, default: '' },
   duration: { type: String, default: '' },
+  quantity: { type: String, default: '' },
+  quantity_source: { type: String, enum: ['written', 'calculated', 'not_specified'], default: 'not_specified' },
+  confidence: { type: String, enum: ['high', 'medium', 'low'], default: 'low' },
   route: { type: String, default: 'Oral' },
   instructions: { type: String, default: '' }
 }, { _id: false });
@@ -36,6 +40,7 @@ const PrescriptionSchema = new mongoose.Schema({
   ai_explanation_raw: { type: String, default: '' },
   ai_status: { type: String, default: 'success' },
   ai_language: { type: String, default: 'English' },
+  recovery_plan: { type: mongoose.Schema.Types.Mixed, default: {} },
   cds_warnings: { type: String, default: '' },
   created_at: { type: Date, default: Date.now }
 });

@@ -82,10 +82,11 @@ const generatePrescriptionPdf = (rx, doctor, patient, appt, medicines, siteUrl) 
       
       doc.fillColor('#ffffff').font('Helvetica-Bold').fontSize(9);
       doc.text('#', 58, tableTop + 6);
-      doc.text('Medicine', 90, tableTop + 6);
-      doc.text('Dosage', 260, tableTop + 6);
-      doc.text('Timing / Frequency', 360, tableTop + 6);
-      doc.text('Duration', 480, tableTop + 6);
+      doc.text('Medicine', 82, tableTop + 6);
+      doc.text('Dose', 190, tableTop + 6);
+      doc.text('Schedule', 266, tableTop + 6);
+      doc.text('Duration', 378, tableTop + 6);
+      doc.text('Quantity', 455, tableTop + 6);
 
       let currentY = tableTop + 22;
       doc.font('Helvetica').fontSize(9).fillColor('#1e293b');
@@ -98,10 +99,11 @@ const generatePrescriptionPdf = (rx, doctor, patient, appt, medicines, siteUrl) 
             doc.fillColor('#1e293b');
           }
           doc.text(String(idx + 1), 58, currentY + 6);
-          doc.text(med.name || '', 90, currentY + 6, { width: 160, lineBreak: false });
-          doc.text(med.dosage || '—', 260, currentY + 6);
-          doc.text(med.timing || med.frequency || '—', 360, currentY + 6);
-          doc.text(med.duration || '—', 480, currentY + 6);
+          doc.text(med.name || '', 82, currentY + 6, { width: 102, lineBreak: false });
+          doc.text([med.dosage, med.units_per_dose].filter(Boolean).join(' · ') || '—', 190, currentY + 6, { width: 70, lineBreak: false });
+          doc.text(med.timing || med.frequency || '—', 266, currentY + 6, { width: 108, lineBreak: false });
+          doc.text(med.duration || '—', 378, currentY + 6, { width: 72, lineBreak: false });
+          doc.text(med.quantity || '—', 455, currentY + 6, { width: 82, lineBreak: false });
           
           // Draw Row bottom border
           doc.strokeColor('#e2e8f0').lineWidth(0.5).moveTo(48, currentY + 20).lineTo(547, currentY + 20).stroke();

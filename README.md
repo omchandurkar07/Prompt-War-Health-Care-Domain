@@ -6,12 +6,14 @@ Clinical and AI-assisted features are decision support only. They are not a diag
 
 ## Features
 
-- **Patients:** register and sign in, find doctors, book and manage appointments, pay confirmed appointments with Razorpay, track health, manage records and allergies, use family/vaccination tools, and view care plans.
-- **Doctors:** manage profiles and appointments, review patient records, use the consultation room and queue, and create prescriptions and care plans.
+- **Patients:** register and sign in, find doctors, book and manage appointments, pay confirmed appointments through Razorpay or the clearly labeled local demo-payment flow, track health, manage records and allergies, use family/vaccination tools, and view care plans and prescription history.
+- **Doctors:** manage profiles and appointments, review patient records, use the consultation room and queue, and create prescriptions by uploading a PDF/image for medicine extraction or adding medicine details manually.
 - **Administrators:** manage platform accounts and appointments and review eligible payment-refund requests.
 - **Shared workflows:** temporary health-record sharing, health passports, visit preparation, reminders, reports, and symptom assistance.
 
-Some workflows require external providers or configuration. Payment checkout requires Razorpay test credentials. MongoDB is required for server startup. The optional Python ML helper requires the dependencies in `requirements.txt`.
+Prescription scan extraction is a transcription aid: doctors must verify medicine names and instructions against the source before sharing. AI recovery guidance is informational and does not replace clinical judgment.
+
+Some workflows require external providers or configuration. Without Razorpay credentials, confirmed appointments can use the development-only payment simulation; it records a demo payment but does not charge money. Configure Razorpay test credentials to exercise the provider checkout. MongoDB is required for server startup. The optional Python ML helper requires the dependencies in `requirements.txt`.
 
 ## Technology
 
@@ -32,7 +34,7 @@ Prerequisites: a supported Node.js/npm installation, MongoDB, and (for ML featur
    npm install --prefix client
    ```
 
-2. Create a local environment file and set a strong `SECRET_KEY`. Add test Razorpay credentials only if you intend to test payments:
+2. Create a local environment file and set a strong `SECRET_KEY`. Razorpay credentials are optional for local development; leave both keys unset to use the clearly labeled demo payment simulation:
 
    ```powershell
    Copy-Item .env.example .env
@@ -59,6 +61,12 @@ Prerequisites: a supported Node.js/npm installation, MongoDB, and (for ML featur
    Open the Vite URL printed in the terminal.
 
 To enable the optional ML helper, install `requirements.txt` in a Python virtual environment. For payment setup and webhook configuration, see [PAYMENTS_SETUP.md](PAYMENTS_SETUP.md).
+
+### Phase 2 testing
+
+- Build the frontend with `npm run build --prefix client` and lint it with `npm run lint --prefix client`.
+- Test appointment payments after confirming an appointment as a doctor. With no Razorpay credentials, the patient dashboard offers a demo confirmation; no real charge is made. For provider checkout, configure Razorpay test credentials and follow [PAYMENTS_SETUP.md](PAYMENTS_SETUP.md).
+- Test prescriptions by uploading a PDF or image in the doctor's prescription form. Extracted medicine details appear for review, and additional medicines can be entered manually. Verify all extracted instructions against the original before saving.
 
 ### Gmail email setup
 
