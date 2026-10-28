@@ -13,7 +13,6 @@ const Review = () => {
   // Form State
   const [rating, setRating] = useState(5);
   const [comment, setComment] = useState('');
-  const [hoverRating, setHoverRating] = useState(0);
   const [submitLoading, setSubmitLoading] = useState(false);
   const [message, setMessage] = useState('');
 
@@ -113,19 +112,23 @@ const Review = () => {
           
           <div className="form-group">
             <label className="form-label" style={{ fontSize: '0.78rem', fontWeight: 700, marginBottom: '8px', display: 'block' }}>Consultation Rating</label>
-            <div style={{ display: 'flex', gap: '10px', justifyContent: 'center', fontSize: '2rem', cursor: 'pointer' }}>
-              {[1, 2, 3, 4, 5].map((starIdx) => {
-                const active = starIdx <= (hoverRating || rating);
+            <div className="doctor-rating" role="radiogroup" aria-label="Consultation rating">
+              {[5, 4, 3, 2, 1].map((value) => {
+                const inputId = `review-${aid}-rating-${value}`;
                 return (
-                  <span
-                    key={starIdx}
-                    onMouseEnter={() => setHoverRating(starIdx)}
-                    onMouseLeave={() => setHoverRating(0)}
-                    onClick={() => setRating(starIdx)}
-                    style={{ color: active ? 'var(--warning)' : '#e2e8f0', transition: 'color 0.15s ease' }}
-                  >
-                    ★
-                  </span>
+                  <React.Fragment key={value}>
+                    <input
+                      id={inputId}
+                      type="radio"
+                      name={`review-rating-${aid}`}
+                      value={value}
+                      checked={rating === value}
+                      onChange={() => setRating(value)}
+                      disabled={submitLoading}
+                      aria-label={`${value} ${value === 1 ? 'star' : 'stars'}`}
+                    />
+                    <label htmlFor={inputId} title={`${value} ${value === 1 ? 'star' : 'stars'}`} />
+                  </React.Fragment>
                 );
               })}
             </div>

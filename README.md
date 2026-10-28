@@ -38,6 +38,7 @@ The application has separate experiences for patients, doctors, and administrato
 ### Appointment and payment
 
 Appointments are booked immediately and lead to checkout. When Razorpay is not configured, the development payment simulation can represent success or failure without charging money. A failed payment notifies the doctor, who can offer a new slot and send a message for the patient.
+Appointment dates and slot times currently use India Standard Time (`Asia/Kolkata`); slots that have already passed on the selected date are excluded.
 
 ![Appointment booking, payment, and rescheduling workflow](docs/images/appointment-payment-flow.svg)
 
@@ -48,12 +49,14 @@ Appointments are booked immediately and lead to checkout. When Razorpay is not c
 ### Patient experience
 
 - Register, sign in, manage a profile, and discover doctors.
+- View clinic pins on the doctor map, inspect doctor/clinic details, and—after enabling location—see straight-line distance plus a road-route distance and estimated driving time. Route estimates do not include live traffic.
 - Book appointments without waiting for doctor approval, then proceed to checkout.
 - Use Razorpay when configured, or the clearly labeled local demo-payment simulation during development.
 - Review appointment updates and request rescheduling; receive doctor messages about a replacement time after payment failure.
 - Access prescriptions and care instructions shared by a doctor.
 - Manage health records in Health Locker, share records through supported links, and export record metadata and structured prescription data as JSON.
 - Track health, manage allergies, maintain family-member and vaccination details, and review care plans and reminders.
+- Receive in-app reminders for confirmed consultations; both patient and doctor are notified about one hour before the appointment.
 - Prepare for visits, participate in consultations, and use queue, health-passport, preventive-care, and symptom-assistance workflows where available.
 - Choose English, Hindi, or Marathi for supported AI-assisted prescription summaries. The rest of the interface is currently English.
 
@@ -71,6 +74,7 @@ Appointments are booked immediately and lead to checkout. When Razorpay is not c
 
 - Admin workflows for platform account and appointment oversight, including eligible refund requests.
 - Appointment and medicine reminders, reports, visit preparation, health passports, and scoped health-record sharing.
+- Schedule `GET /api/cron/send-consultation-reminders` to run every five minutes. It sends a one-hour-before in-app reminder to both appointment participants, uses India Standard Time (`Asia/Kolkata`), and avoids resending reminders already recorded as sent.
 - Accessibility controls for larger text and high contrast, a keyboard-accessible skip link, and visible focus indicators.
 
 ## Technology and architecture

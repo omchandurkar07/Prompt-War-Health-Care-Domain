@@ -13,6 +13,7 @@ const PatientSchema = new mongoose.Schema({
   preferred_language: { type: String, enum: ['English', 'Hindi', 'Marathi'], default: 'English' },
   profile_image: { type: String },
   chronic_conditions: { type: String, default: '' },
+  favorite_doctors: [{ type: mongoose.Schema.Types.ObjectId, ref: 'Doctor' }],
   is_verified: { type: Boolean, default: false },
   created_at: { type: Date, default: Date.now }
 });

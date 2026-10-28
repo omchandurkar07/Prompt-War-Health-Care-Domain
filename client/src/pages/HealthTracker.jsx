@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import axios from 'axios';
 import {
   Chart as ChartJS,
@@ -27,6 +27,8 @@ const HealthTracker = () => {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
   const [selectedCondition, setSelectedCondition] = useState('');
+  const [reportDownloadState, setReportDownloadState] = useState('idle');
+  const reportDownloadTimer = useRef(null);
   
   // Chart and Log Details
   const [chartLogs, setChartLogs] = useState([]);
@@ -245,8 +247,37 @@ const HealthTracker = () => {
     }
   };
 
-  const handleDownloadReport = () => {
-    window.open('/api/health-tracker/download-report', '_blank');
+  useEffect(() => () => {
+    if (reportDownloadTimer.current) {
+      window.clearTimeout(reportDownloadTimer.current);
+    }
+  }, []);
+
+  const handleDownloadReport = async () => {
+    if (reportDownloadState === 'downloading') return;
+
+    setReportDownloadState('downloading');
+    try {
+      const response = await axios.get('/api/health-tracker/download-report', { responseType: 'blob' });
+      const downloadUrl = URL.createObjectURL(response.data);
+      const link = document.createElement('a');
+      link.href = downloadUrl;
+      link.download = `Health_Tracker_Report_${new Date().toISOString().slice(0, 10)}.pdf`;
+      document.body.appendChild(link);
+      link.click();
+      link.remove();
+      window.setTimeout(() => URL.revokeObjectURL(downloadUrl), 1000);
+
+      setReportDownloadState('downloaded');
+      reportDownloadTimer.current = window.setTimeout(() => {
+        setReportDownloadState('idle');
+        reportDownloadTimer.current = null;
+      }, 4000);
+    } catch (downloadError) {
+      console.error('Failed to download health report', downloadError);
+      setReportDownloadState('idle');
+      alert(downloadError.response?.data?.error || 'Unable to download your health report.');
+    }
   };
 
   // Compile Chart data structures
@@ -338,8 +369,27 @@ const HealthTracker = () => {
           <h1 style={{ fontSize: '1.85rem', fontWeight: 800, margin: 0 }}>Smart Health Tracker</h1>
           <p style={{ color: 'var(--text-muted)', fontSize: '0.9rem', marginTop: '4px' }}>Log daily telemetry readings and check clinical trends correlated with your adherence logs.</p>
         </div>
-        <button onClick={handleDownloadReport} className="btn btn-outline btn-sm">
-          📥 Download Health Report PDF
+        <button
+          type="button"
+          onClick={handleDownloadReport}
+          className={`health-report-download ${reportDownloadState === 'downloaded' ? 'is-downloaded' : ''}`}
+          disabled={reportDownloadState === 'downloading' || reportDownloadState === 'downloaded'}
+          aria-busy={reportDownloadState === 'downloading'}
+          aria-live="polite"
+        >
+          <span className="health-report-download-circle" aria-hidden="true">
+            {reportDownloadState === 'downloading' ? (
+              <span className="health-report-download-square" />
+            ) : (
+              <svg className="health-report-download-icon" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none">
+                <path d="M12 4v11m0 0 4-4m-4 4-4-4M5 19h14" />
+              </svg>
+            )}
+          </span>
+          <span className="health-report-download-title">
+            {reportDownloadState === 'downloading' ? 'Preparing report…' : 'Download Health Report PDF'}
+          </span>
+          <span className="health-report-download-done">Report Downloaded</span>
         </button>
       </div>
 

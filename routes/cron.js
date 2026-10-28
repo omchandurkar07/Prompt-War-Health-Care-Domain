@@ -7,6 +7,122 @@ const Notification = require('../models/Notification');
 const { sendWhatsappMessage } = require('../services/whatsappService');
 const { createEmailTransporter } = require('../services/emailService');
 
+const APPOINTMENT_TIME_ZONE = 'Asia/Kolkata';
+
+const getDateInAppointmentTimeZone = (date) => {
+  const parts = new Intl.DateTimeFormat('en-CA', {
+    timeZone: APPOINTMENT_TIME_ZONE,
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit'
+  }).formatToParts(date);
+  const values = Object.fromEntries(parts.map(({ type, value }) => [type, value]));
+  return `${values.year}-${values.month}-${values.day}`;
+};
+
+const formatAppointmentTime = (time) => {
+  const [hours, minutes] = time.split(':').map(Number);
+  const suffix = hours >= 12 ? 'PM' : 'AM';
+  return `${hours % 12 || 12}:${String(minutes).padStart(2, '0')} ${suffix}`;
+};
+
+// Run every 5 minutes to notify both participants within an hour of a consultation.
+router.all('/cron/send-consultation-reminders', async (req, res) => {
+  const now = new Date();
+  const today = getDateInAppointmentTimeZone(now);
+  const tomorrow = getDateInAppointmentTimeZone(new Date(now.getTime() + 24 * 60 * 60 * 1000));
+
+  try {
+    const appointments = await Appointment.find({
+      appt_date: { $in: [today, tomorrow] },
+      status: 'confirmed',
+      consultation_reminder_sent_at: { $exists: false }
+    }).populate('patient_id', 'full_name').populate('doctor_id', 'full_name');
+
+    let remindersSent = 0;
+    let errors = 0;
+
+    for (const appointment of appointments) {
+      if (!appointment.patient_id || !appointment.doctor_id) continue;
+
+      const appointmentTime = new Date(`${appointment.appt_date}T${appointment.time_slot}:00+05:30`);
+      const minutesUntilAppointment = (appointmentTime.getTime() - now.getTime()) / 60000;
+      if (minutesUntilAppointment < 0 || minutesUntilAppointment > 60) continue;
+
+      const claimedAt = new Date();
+      const claim = await Appointment.findOneAndUpdate(
+        {
+          _id: appointment._id,
+          status: 'confirmed',
+          consultation_reminder_sent_at: { $exists: false },
+          $or: [
+            { consultation_reminder_claimed_at: { $exists: false } },
+            { consultation_reminder_claimed_at: { $lt: new Date(claimedAt.getTime() - 10 * 60 * 1000) } }
+          ]
+        },
+        { $set: { consultation_reminder_claimed_at: claimedAt } },
+        { new: true }
+      );
+      if (!claim) continue;
+
+      const doctorName = appointment.doctor_id.full_name.replace(/^(dr\.?\s*)+/i, '');
+      const patientName = appointment.patient_id.full_name || 'A patient';
+      const time = formatAppointmentTime(appointment.time_slot);
+      const when = `${appointment.appt_date} at ${time}`;
+      const notifications = [
+        {
+          user_id: appointment.patient_id._id,
+          user_type: 'patient',
+          title: 'Consultation in about an hour',
+          message: `Your consultation with Dr. ${doctorName} is scheduled for ${when}.`,
+          link: '/dashboard#appointments'
+        },
+        {
+          user_id: appointment.doctor_id._id,
+          user_type: 'doctor',
+          title: 'Consultation in about an hour',
+          message: `Your consultation with ${patientName} is scheduled for ${when}.`,
+          link: '/doctor/appointments'
+        }
+      ];
+
+      try {
+        await Notification.create(notifications);
+        await Appointment.updateOne(
+          { _id: appointment._id, consultation_reminder_claimed_at: claimedAt },
+          {
+            $set: { consultation_reminder_sent_at: new Date() },
+            $unset: { consultation_reminder_claimed_at: 1 }
+          }
+        );
+        remindersSent++;
+      } catch (reminderError) {
+        try {
+          await Appointment.updateOne(
+            { _id: appointment._id, consultation_reminder_claimed_at: claimedAt },
+            { $unset: { consultation_reminder_claimed_at: 1 } }
+          );
+        } catch (claimError) {
+          console.error(`[CONSULTATION-REMINDER] Could not release claim for appointment ${appointment._id}:`, claimError.message || claimError);
+        }
+        console.error(`[CONSULTATION-REMINDER] Failed for appointment ${appointment._id}:`, reminderError.message || reminderError);
+        errors++;
+      }
+    }
+
+    res.json({
+      ok: true,
+      message: 'Consultation reminders processed.',
+      reminders_sent: remindersSent,
+      errors_encountered: errors,
+      time_zone: APPOINTMENT_TIME_ZONE
+    });
+  } catch (error) {
+    console.error('[CONSULTATION-REMINDER] Processing failed:', error);
+    res.status(500).json({ ok: false, error: 'Could not process consultation reminders.' });
+  }
+});
+
 // GET & POST /api/cron/send-reminders
 router.all('/api/cron/send-reminders', async (req, res) => {
   const tomorrow = new Date();

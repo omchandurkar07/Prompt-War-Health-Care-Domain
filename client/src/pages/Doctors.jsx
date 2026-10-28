@@ -1,7 +1,30 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useCallback } from 'react';
 import { Link, useNavigate, useLocation } from 'react-router-dom';
 import axios from 'axios';
 import DoctorAvatar from '../components/DoctorAvatar';
+import FavoriteDoctorSwitch from '../components/FavoriteDoctorSwitch';
+import { useAuth } from '../context/AuthContext';
+
+const APPOINTMENT_TIME_ZONE = 'Asia/Kolkata';
+
+const getAppointmentDateTime = () => {
+  const parts = new Intl.DateTimeFormat('en-CA', {
+    timeZone: APPOINTMENT_TIME_ZONE,
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+    hour: '2-digit',
+    minute: '2-digit',
+    hourCycle: 'h23'
+  }).formatToParts(new Date());
+  const values = Object.fromEntries(parts.map(({ type, value }) => [type, value]));
+  return {
+    date: `${values.year}-${values.month}-${values.day}`,
+    time: `${values.hour}:${values.minute}`
+  };
+};
+
+const getDoctorDisplayName = (name = '') => name.trim().replace(/^(dr\.?\s*)+/i, '');
 
 const getDistance = (lat1, lon1, lat2, lon2) => {
   const R = 6371; // Earth radius in km
@@ -17,7 +40,19 @@ const getDistance = (lat1, lon1, lat2, lon2) => {
   return R * c;
 };
 
+const hasCoordinates = (latitude, longitude) => {
+  if (latitude === null || latitude === undefined || longitude === null ||
+      longitude === undefined || latitude === '' || longitude === '') {
+    return false;
+  }
+  const lat = Number(latitude);
+  const lng = Number(longitude);
+  return Number.isFinite(lat) && lat >= -90 && lat <= 90 &&
+    Number.isFinite(lng) && lng >= -180 && lng <= 180;
+};
+
 const Doctors = () => {
+  const { role } = useAuth();
   const navigate = useNavigate();
   const location = useLocation();
   const [doctors, setDoctors] = useState([]);
@@ -25,10 +60,16 @@ const Doctors = () => {
   const [specializations, setSpecializations] = useState([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
+  const [favoriteDoctorIds, setFavoriteDoctorIds] = useState(() => new Set());
+  const [favoriteUpdates, setFavoriteUpdates] = useState(() => new Set());
+  const [favoriteError, setFavoriteError] = useState('');
 
   // Map and Route States
   const [leafletLoaded, setLeafletLoaded] = useState(false);
   const [selectedRouteDocId, setSelectedRouteDocId] = useState(null);
+  const [routeInfo, setRouteInfo] = useState(null);
+  const [routeLoading, setRouteLoading] = useState(false);
+  const [routeError, setRouteError] = useState('');
 
   // Map Refs
   const mapInstance = React.useRef(null);
@@ -51,6 +92,55 @@ const Doctors = () => {
   const [selectedDoc, setSelectedDoc] = useState(null);
   const [reviews, setReviews] = useState([]);
   const [detailLoading, setDetailLoading] = useState(false);
+
+  useEffect(() => {
+    if (role !== 'patient') {
+      setFavoriteDoctorIds(new Set());
+      return;
+    }
+
+    let active = true;
+    axios.get('/api/favorite-doctors')
+      .then(({ data }) => {
+        if (active && data.ok) setFavoriteDoctorIds(new Set(data.doctor_ids));
+      })
+      .catch((err) => {
+        console.error('Failed to load favorite doctors', err);
+        if (active) setFavoriteError(err.response?.data?.error || 'Could not load your favorite doctors.');
+      });
+
+    return () => { active = false; };
+  }, [role]);
+
+  const handleFavoriteChange = async (doctorId, isFavorite) => {
+    if (role !== 'patient') {
+      navigate('/login');
+      return;
+    }
+    setFavoriteError('');
+    setFavoriteUpdates(previous => new Set(previous).add(doctorId));
+    try {
+      const { data } = await axios.put(`/api/favorite-doctors/${doctorId}`, { is_favorite: isFavorite });
+      if (!data.ok) {
+        throw new Error(data.error || 'Unable to update favorite doctor.');
+      }
+      setFavoriteDoctorIds(previous => {
+        const next = new Set(previous);
+        if (data.is_favorite) next.add(doctorId);
+        else next.delete(doctorId);
+        return next;
+      });
+    } catch (err) {
+      console.error('Failed to update favorite doctor', err);
+      setFavoriteError(err.response?.data?.error || err.message || 'Unable to update favorite doctor.');
+    } finally {
+      setFavoriteUpdates(previous => {
+        const next = new Set(previous);
+        next.delete(doctorId);
+        return next;
+      });
+    }
+  };
 
   // Dynamic Leaflet CDN Loader
   useEffect(() => {
@@ -76,25 +166,14 @@ const Doctors = () => {
     }
   }, []);
 
-  // Bind global handler for leaflet popup clicks
-  useEffect(() => {
-    window.selectRouteDoctor = (docId) => {
-      setSelectedRouteDocId(docId);
-    };
-    return () => {
-      delete window.selectRouteDoctor;
-    };
-  }, []);
-
   // Synchronize Map Markers
   useEffect(() => {
-    if (!leafletLoaded || !window.L) return;
+    if (!leafletLoaded || !window.L || !document.getElementById('doctors-leaflet-map')) return;
     const L = window.L;
 
     if (!mapInstance.current) {
-      // Default Center Pune
-      const startLat = coords.lat || 18.5204;
-      const startLng = coords.lng || 73.8567;
+      const startLat = coords.lat ?? 18.5204;
+      const startLng = coords.lng ?? 73.8567;
 
       mapInstance.current = L.map('doctors-leaflet-map').setView([startLat, startLng], 12);
       L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
@@ -107,165 +186,157 @@ const Doctors = () => {
     const markers = markersGroup.current;
     markers.clearLayers();
 
-    // 1. User Position
-    if (coords.lat && coords.lng) {
+    const userHasLocation = hasCoordinates(coords.lat, coords.lng);
+    const doctorHasCoordinates = doctors.some(({ doc }) => hasCoordinates(doc.latitude, doc.longitude));
+
+    // User position
+    if (userHasLocation) {
       const userIcon = L.divIcon({
         className: 'user-pulse-marker',
-        html: `<div style="width:16px; height:16px; background:#2563eb; border:3px solid white; border-radius:50%; box-shadow: 0 0 8px rgba(37,99,235,0.6);"></div>`,
+        html: '<div style="width:16px;height:16px;background:#2563eb;border:3px solid white;border-radius:50%;box-shadow:0 0 8px rgba(37,99,235,0.6);"></div>',
         iconSize: [16, 16]
       });
       L.marker([coords.lat, coords.lng], { icon: userIcon })
         .addTo(markers)
-        .bindPopup('<strong>My Location</strong>');
+        .bindPopup('Your location');
     }
 
-    // 2. Doctor Positions
+    // Doctor pins use DOM text nodes so profile data is not interpreted as HTML.
     doctors.forEach(({ doc }) => {
-      if (doc.latitude && doc.longitude) {
-        L.marker([doc.latitude, doc.longitude])
-          .addTo(markers)
-          .bindPopup(`
-            <div style="font-family: sans-serif; font-size: 0.82rem; min-width: 150px; line-height: 1.4;">
-              <strong style="display:block; font-size:0.88rem; color:#1e293b;">Dr. ${doc.full_name}</strong>
-              <span style="color:#2563eb; font-weight:600; display:block; margin-bottom:4px;">${doc.specialization}</span>
-              <span style="color:var(--text-muted); display:block; font-size:0.75rem;">Clinic: ${doc.hospital_name || 'Clinic'}</span>
-              <button 
-                onclick="window.selectRouteDoctor('${doc._id}')"
-                style="background:#4f46e5; color:white; border:none; padding:5px 10px; border-radius:6px; font-size:0.72rem; margin-top:8px; cursor:pointer; width:100%; font-weight:600;"
-              >
-                🚗 Calculate Route
-              </button>
-            </div>
-          `);
+      if (!hasCoordinates(doc.latitude, doc.longitude)) return;
+
+      const popup = document.createElement('div');
+      popup.style.cssText = 'font-family:sans-serif;font-size:13px;line-height:1.5;min-width:190px';
+      const title = document.createElement('strong');
+      title.textContent = `Dr. ${getDoctorDisplayName(doc.full_name)}`;
+      title.style.cssText = 'display:block;font-size:14px;color:#1e293b';
+      popup.appendChild(title);
+
+      const addDetail = (value) => {
+        if (!value) return;
+        const detail = document.createElement('div');
+        detail.textContent = value;
+        popup.appendChild(detail);
+      };
+
+      addDetail(doc.specialization);
+      addDetail(doc.hospital_name || 'Clinic');
+      addDetail(doc.clinic_address || doc.city || '');
+      addDetail(doc.qualification || '');
+      addDetail(doc.bio || '');
+      addDetail(doc.available_days ? `Clinic schedule: ${doc.available_days}` : '');
+      if (doc.home_visit_available) addDetail(`Home visits available · ₹${doc.home_visit_fee || doc.consultation_fee}`);
+      addDetail(`Rating: ${Number(doc.rating_avg || 0).toFixed(1)} (${doc.rating_count || 0} reviews)`);
+      addDetail(`Consultation fee: ₹${doc.consultation_fee ?? 'Not listed'}`);
+      addDetail(doc.is_available ? 'Currently marked available' : 'Currently marked busy');
+      if (userHasLocation) {
+        const distance = getDistance(coords.lat, coords.lng, Number(doc.latitude), Number(doc.longitude));
+        addDetail(`Straight-line distance: ${distance.toFixed(1)} km`);
+        if (routeInfo?.doctorId === String(doc._id)) {
+          addDetail(`Driving route: ${routeInfo.distanceKm.toFixed(1)} km · about ${routeInfo.durationMinutes} min`);
+        }
+      } else {
+        addDetail('Enable your location for distance and driving time.');
       }
+
+      const routeButton = document.createElement('button');
+      routeButton.type = 'button';
+      routeButton.textContent = userHasLocation ? 'Show route and travel time' : 'Select doctor';
+      routeButton.style.cssText = 'margin-top:8px;padding:6px 10px;border:0;border-radius:6px;background:#4f46e5;color:white;cursor:pointer;width:100%';
+      routeButton.addEventListener('click', () => setSelectedRouteDocId(String(doc._id)));
+      popup.appendChild(routeButton);
+
+      const marker = L.marker([Number(doc.latitude), Number(doc.longitude)]).addTo(markers);
+      marker.bindPopup(popup);
+      marker.on('click', () => setSelectedRouteDocId(String(doc._id)));
     });
 
     if (markers.getLayers().length > 0) {
       mapInstance.current.fitBounds(markers.getBounds(), { padding: [40, 40] });
+    } else if (userHasLocation) {
+      mapInstance.current.setView([coords.lat, coords.lng], 12);
+    } else if (!doctorHasCoordinates) {
+      mapInstance.current.setView([18.5204, 73.8567], 12);
     }
-  }, [leafletLoaded, doctors, coords.lat, coords.lng]);
+  }, [leafletLoaded, doctors, coords.lat, coords.lng, routeInfo]);
 
-  // Map and Route States
-  const [trafficRoutes, setTrafficRoutes] = useState([]);
-  const [trafficLoading, setTrafficLoading] = useState(false);
-  const [suggestedRoute, setSuggestedRoute] = useState(null);
-  const [trafficFactors, setTrafficFactors] = useState(null);
-
-  // Fetch ML Traffic Routes
+  // Request an actual road route; the traffic helper returns simulated roads, not navigation ETAs.
   useEffect(() => {
-    const getTrafficData = async () => {
-      const selectedRouteDoc = doctors.find(d => d.doc._id === selectedRouteDocId)?.doc;
-      if (!selectedRouteDoc || !coords.lat || !coords.lng) {
-        setTrafficRoutes([]);
-        setSuggestedRoute(null);
-        setTrafficFactors(null);
-        return;
-      }
-      setTrafficLoading(true);
+    const selectedRouteDoc = doctors.find(d => d.doc._id === selectedRouteDocId)?.doc;
+    setRouteInfo(null);
+    setRouteError('');
+    if (!selectedRouteDoc || !hasCoordinates(coords.lat, coords.lng) ||
+        !hasCoordinates(selectedRouteDoc.latitude, selectedRouteDoc.longitude)) {
+      setRouteLoading(false);
+      return undefined;
+    }
+
+    const controller = new AbortController();
+    const loadRoute = async () => {
+      setRouteLoading(true);
       try {
-        const res = await axios.post('/api/ml-traffic-predict', {
-          user_lat: coords.lat,
-          user_lng: coords.lng,
-          dest_lat: selectedRouteDoc.latitude,
-          dest_lng: selectedRouteDoc.longitude
-        });
-        if (res.data && res.data.ok) {
-          setTrafficRoutes(res.data.roads || []);
-          setSuggestedRoute(res.data.best_route_suggested || null);
-          setTrafficFactors(res.data.current_time_factors || null);
+        const origin = `${Number(coords.lng)},${Number(coords.lat)}`;
+        const destination = `${Number(selectedRouteDoc.longitude)},${Number(selectedRouteDoc.latitude)}`;
+        const response = await axios.get(
+          `https://router.project-osrm.org/route/v1/driving/${origin};${destination}`,
+          { params: { overview: 'full', geometries: 'geojson', steps: false }, signal: controller.signal }
+        );
+        const route = response.data?.routes?.[0];
+        if (response.data?.code !== 'Ok' || !route || !Array.isArray(route.geometry?.coordinates)) {
+          throw new Error('No driving route was found for this location.');
         }
+        setRouteInfo({
+          doctorId: String(selectedRouteDoc._id),
+          distanceKm: route.distance / 1000,
+          durationMinutes: Math.ceil(route.duration / 60),
+          coordinates: route.geometry.coordinates.map(([lng, lat]) => [lat, lng])
+        });
       } catch (err) {
-        console.error('Error fetching ML traffic prediction:', err);
+        if (err.name !== 'CanceledError' && err.code !== 'ERR_CANCELED') {
+          console.error('Could not calculate doctor driving route:', err);
+          setRouteError(err.response?.data?.message || err.message || 'Driving route could not be calculated.');
+        }
       } finally {
-        setTrafficLoading(false);
+        if (!controller.signal.aborted) setRouteLoading(false);
       }
     };
-    getTrafficData();
+
+    loadRoute();
+    return () => {
+      controller.abort();
+    };
   }, [selectedRouteDocId, coords.lat, coords.lng, doctors]);
 
-  // Synchronize Route Polyline
+  // Draw the selected driving route.
   useEffect(() => {
     if (!leafletLoaded || !window.L || !mapInstance.current) return;
-    const L = window.L;
-
     if (routeLine.current) {
-      if (Array.isArray(routeLine.current)) {
-        routeLine.current.forEach(line => line.remove());
-      } else {
-        routeLine.current.remove();
-      }
+      routeLine.current.remove();
       routeLine.current = null;
     }
+    if (!routeInfo || routeInfo.doctorId !== String(selectedRouteDocId)) return;
 
-    const selectedRouteDoc = doctors.find(d => d.doc._id === selectedRouteDocId)?.doc;
-    if (!selectedRouteDoc || !coords.lat || !coords.lng) return;
-
-    const newLines = [];
-
-    if (trafficRoutes.length > 0) {
-      // Draw roads from OSM with traffic coloring
-      trafficRoutes.forEach(road => {
-        const isSuggested = suggestedRoute && road.id === suggestedRoute.id;
-        const color = road.density_color || '#6366f1';
-        
-        const line = L.polyline(road.coordinates, {
-          color: color,
-          weight: isSuggested ? 6 : 3.5,
-          opacity: isSuggested ? 0.95 : 0.6,
-          dashArray: isSuggested ? null : '5, 8'
-        }).addTo(mapInstance.current);
-
-        // Tooltip displaying density prediction details
-        line.bindTooltip(`
-          <div style="font-family:sans-serif; font-size:0.75rem; padding:2px;">
-            <strong>${road.name || 'Local road'}</strong> (${road.type})<br/>
-            Traffic Density: <strong style="color:${color};">${road.density}</strong> (${road.confidence}% confidence)
-          </div>
-        `, { sticky: true });
-
-        newLines.push(line);
-      });
-
-      // Fit map bounds to show all roads
-      const bounds = L.featureGroup(newLines).getBounds();
-      mapInstance.current.fitBounds(bounds, { padding: [50, 50] });
-    } else {
-      // Fallback straight line polyline
-      if (selectedRouteDoc.latitude && selectedRouteDoc.longitude) {
-        const pathPoints = [
-          [coords.lat, coords.lng],
-          [selectedRouteDoc.latitude, selectedRouteDoc.longitude]
-        ];
-        const fallbackLine = L.polyline(pathPoints, {
-          color: '#6366f1',
-          weight: 5,
-          dashArray: '8, 12',
-          opacity: 0.85
-        }).addTo(mapInstance.current);
-
-        newLines.push(fallbackLine);
-        mapInstance.current.fitBounds(fallbackLine.getBounds(), { padding: [60, 60] });
-      }
-    }
-
-    routeLine.current = newLines;
+    const line = window.L.polyline(routeInfo.coordinates, {
+      color: '#4f46e5',
+      weight: 6,
+      opacity: 0.9
+    }).addTo(mapInstance.current);
+    routeLine.current = line;
+    mapInstance.current.fitBounds(line.getBounds(), { padding: [50, 50] });
 
     return () => {
-      if (routeLine.current) {
-        if (Array.isArray(routeLine.current)) {
-          routeLine.current.forEach(line => line.remove());
-        } else {
-          routeLine.current.remove();
-        }
-        routeLine.current = null;
-      }
+      line.remove();
+      if (routeLine.current === line) routeLine.current = null;
     };
-  }, [leafletLoaded, selectedRouteDocId, coords.lat, coords.lng, doctors, trafficRoutes, suggestedRoute]);
+  }, [leafletLoaded, selectedRouteDocId, routeInfo]);
 
   // Booking State
   const [showBooking, setShowBooking] = useState(false);
   const [bookingDate, setBookingDate] = useState('');
   const [availableSlots, setAvailableSlots] = useState([]);
+  const [slotsLoading, setSlotsLoading] = useState(false);
+  const [slotsError, setSlotsError] = useState('');
+  const [slotsMessage, setSlotsMessage] = useState('');
   const [selectedSlot, setSelectedSlot] = useState('');
   const [reason, setReason] = useState('');
   const [apptType, setApptType] = useState('normal');
@@ -283,7 +354,7 @@ const Doctors = () => {
       if (homeVisitOnly) {
         url += '&home_visit=1';
       }
-      if (useGeolocation && coords.lat && coords.lng) {
+      if (useGeolocation && hasCoordinates(coords.lat, coords.lng)) {
         url += `&user_lat=${coords.lat}&user_lng=${coords.lng}`;
       }
 
@@ -324,7 +395,7 @@ const Doctors = () => {
         if (homeVisitOnly) {
           url += '&home_visit=1';
         }
-        if (useGeolocation && coords.lat && coords.lng) {
+        if (useGeolocation && hasCoordinates(coords.lat, coords.lng)) {
           url += `&user_lat=${coords.lat}&user_lng=${coords.lng}`;
         }
 
@@ -347,7 +418,7 @@ const Doctors = () => {
     };
     
     fetchFiltered();
-  }, [location.search, minExp, maxFee, minRating, availableOnly, homeVisitOnly, useGeolocation, radius]);
+  }, [location.search, minExp, maxFee, minRating, availableOnly, homeVisitOnly, useGeolocation, radius, coords.lat, coords.lng]);
 
   const handleSearchSubmit = (e) => {
     e.preventDefault();
@@ -403,7 +474,9 @@ const Doctors = () => {
   const startBooking = async () => {
     if (!selectedDoc) return;
     setShowBooking(true);
-    setBookingDate(new Date().toISOString().split('T')[0]);
+    setBookingDate(getAppointmentDateTime().date);
+    setAvailableSlots([]);
+    setSlotsMessage('');
     setSelectedSlot('');
     setReason('');
     setHomeAddress('');
@@ -421,7 +494,9 @@ const Doctors = () => {
         setSelectedDoc(res.data.doctor);
         setReviews(res.data.reviews || []);
         setShowBooking(true);
-        setBookingDate(new Date().toISOString().split('T')[0]);
+        setBookingDate(getAppointmentDateTime().date);
+        setAvailableSlots([]);
+        setSlotsMessage('');
         setSelectedSlot('');
         setReason('');
         setHomeAddress('');
@@ -438,8 +513,11 @@ const Doctors = () => {
     }
   };
 
-  const fetchSlots = async () => {
+  const fetchSlots = useCallback(async () => {
     if (!selectedDoc || !bookingDate) return;
+    setSlotsLoading(true);
+    setSlotsError('');
+    setSlotsMessage('');
     try {
       // Get config details of doctor
       const infoRes = await axios.get(`/api/doctor-info/${selectedDoc._id}`);
@@ -447,25 +525,50 @@ const Doctors = () => {
       
       const allSlots = infoRes.data.slots ? infoRes.data.slots.split(',') : [];
       const bookedSlots = bookedRes.data || [];
-      
-      // Filter out booked slots
-      const available = allSlots.filter(s => !bookedSlots.includes(s));
+      const availableDays = (infoRes.data.available_days || '')
+        .split(',')
+        .map(day => day.trim());
+      const selectedDay = new Date(`${bookingDate}T00:00:00.000Z`)
+        .toLocaleDateString('en-US', { weekday: 'short', timeZone: 'UTC' });
+      if (!availableDays.includes(selectedDay)) {
+        setAvailableSlots([]);
+        setSlotsMessage(`This doctor is not available on ${selectedDay}. Please select another date.`);
+        return;
+      }
+
+      const current = getAppointmentDateTime();
+      const available = allSlots.filter(slot =>
+        !bookedSlots.includes(slot) &&
+        (bookingDate !== current.date || slot > current.time)
+      );
       setAvailableSlots(available);
     } catch (err) {
       console.error('Error fetching slots', err);
+      setSlotsError(err.response?.data?.error || 'Could not load available appointment slots. Please try again.');
+      setAvailableSlots([]);
+      setSelectedSlot('');
+    } finally {
+      setSlotsLoading(false);
     }
-  };
+  }, [selectedDoc, bookingDate]);
 
   useEffect(() => {
     if (showBooking && bookingDate) {
       fetchSlots();
     }
-  }, [bookingDate, showBooking]);
+  }, [bookingDate, fetchSlots, showBooking]);
 
   const handleBookingSubmit = async (e) => {
     e.preventDefault();
     if (!selectedSlot) {
       alert('Please select a time slot.');
+      return;
+    }
+    const current = getAppointmentDateTime();
+    if (bookingDate < current.date || (bookingDate === current.date && selectedSlot <= current.time)) {
+      setSelectedSlot('');
+      setBookingMessage('That appointment time has already passed. Please choose a future slot.');
+      fetchSlots();
       return;
     }
     if (apptType === 'home_visit' && !homeAddress.trim()) {
@@ -495,7 +598,11 @@ const Doctors = () => {
       }
     } catch (err) {
       console.error(err);
-      setBookingMessage('❌ Error completing booking registration.');
+      setBookingMessage(`❌ ${err.response?.data?.error || 'Error completing booking registration. Please try again.'}`);
+      if (err.response?.status === 409) {
+        setSelectedSlot('');
+        fetchSlots();
+      }
     } finally {
       setBookingLoading(false);
     }
@@ -508,6 +615,7 @@ const Doctors = () => {
       <div className="glass" style={{ padding: '24px 32px', marginBottom: '28px', background: 'linear-gradient(135deg, rgba(37,99,235,0.06), rgba(16,185,129,0.06))' }}>
         <h1 style={{ fontSize: '1.85rem', fontWeight: 800, margin: 0 }}>Find Medical Specialists</h1>
         <p style={{ color: 'var(--text-muted)', fontSize: '0.9rem', marginTop: '4px' }}>Book physical or video consultations with verified specialists. Filter by specialization, coordinates, ratings, and schedules.</p>
+        {favoriteError && <p role="alert" style={{ color: '#b91c1c', margin: '8px 0 0', fontSize: '0.85rem' }}>{favoriteError}</p>}
       </div>
 
       <div className="row g-4">
@@ -647,9 +755,9 @@ const Doctors = () => {
                   <span>🗺️</span> Interactive Specialists Map
                 </h3>
                 <p style={{ color: 'var(--text-muted)', fontSize: '0.8rem', margin: '2px 0 0' }}>
-                  {useGeolocation && coords.lat && coords.lng 
-                    ? 'Showing doctors near you. Click a doctor to show travel route.' 
-                    : 'Activate location filter to show distance and calculate route.'}
+                  {useGeolocation && hasCoordinates(coords.lat, coords.lng)
+                    ? 'Click a doctor pin to view clinic details, distance, and a driving-time estimate.'
+                    : 'Enable your location, then select a doctor pin to see distance and driving time.'}
                 </p>
               </div>
               <div style={{ display: 'flex', gap: '8px' }}>
@@ -691,84 +799,115 @@ const Doctors = () => {
               )}
             </div>
 
-            {/* Selected Route Info Box & ML Traffic suggestions */}
+            <p style={{ fontSize: '0.72rem', color: '#64748b', margin: '8px 2px 0' }}>
+              Map data © OpenStreetMap contributors. Driving routes are provided by OSRM; selecting a route sends your chosen coordinates to that routing service. Estimates do not include live traffic.
+              {' '}Doctors without a saved clinic location cannot be shown as map pins.
+            </p>
+
+            {/* Selected doctor and real road-route details */}
             {(() => {
               const selectedRouteDoc = doctors.find(d => d.doc._id === selectedRouteDocId)?.doc;
-              if (selectedRouteDoc && coords.lat && coords.lng) {
-                const distanceVal = getDistance(coords.lat, coords.lng, selectedRouteDoc.latitude, selectedRouteDoc.longitude);
+              if (selectedRouteDoc) {
+                const canCalculateRoute = hasCoordinates(coords.lat, coords.lng) &&
+                  hasCoordinates(selectedRouteDoc.latitude, selectedRouteDoc.longitude);
+                const directDistance = canCalculateRoute
+                  ? getDistance(coords.lat, coords.lng, Number(selectedRouteDoc.latitude), Number(selectedRouteDoc.longitude))
+                  : null;
+                const matchingRoute = routeInfo?.doctorId === String(selectedRouteDoc._id) ? routeInfo : null;
+                const directionsUrl = canCalculateRoute
+                  ? `https://www.google.com/maps/dir/?api=1&origin=${coords.lat},${coords.lng}&destination=${selectedRouteDoc.latitude},${selectedRouteDoc.longitude}&travelmode=driving`
+                  : null;
                 return (
-                  <div style={{ marginTop: '16px', display: 'flex', flexDirection: 'column', gap: '12px' }}>
-                    
-                    {/* Traffic loading overlay */}
-                    {trafficLoading && (
-                      <div style={{ padding: '10px 14px', background: '#f8fafc', border: '1px solid #e2e8f0', borderRadius: '12px', fontSize: '0.8rem', color: '#64748b', display: 'flex', alignItems: 'center', gap: '8px' }}>
-                        <div style={{ width: '14px', height: '14px', border: '2px solid #cbd5e1', borderTop: '2px solid #6366f1', borderRadius: '50%', animation: 'spin 0.8s linear infinite' }}></div>
-                        Analyzing real-time road networks & traffic patterns via Random Forest ML...
-                      </div>
-                    )}
-
-                    <div style={{ padding: '16px 20px', background: '#f5f3ff', border: '1px solid #ddd6fe', borderRadius: '18px', display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '16px' }}>
-                      <div style={{ flex: 1, minWidth: '240px' }}>
-                        <h4 style={{ fontSize: '0.9rem', fontWeight: 850, margin: 0, color: '#4c1d95', display: 'flex', alignItems: 'center', gap: '8px' }}>
-                          🚗 ML Recommended Route to Dr. {selectedRouteDoc.full_name}
+                  <div style={{ marginTop: '16px', padding: '18px', background: '#f8fafc', border: '1px solid #e2e8f0', borderRadius: '18px' }}>
+                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', flexWrap: 'wrap', gap: '16px' }}>
+                      <div style={{ flex: 1, minWidth: '230px' }}>
+                        <h4 style={{ fontSize: '1rem', fontWeight: 800, margin: 0, color: '#1e293b' }}>
+                          Dr. {getDoctorDisplayName(selectedRouteDoc.full_name)}
                         </h4>
-                        
-                        {suggestedRoute ? (
-                          <div style={{ marginTop: '6px' }}>
-                            <p style={{ fontSize: '0.8rem', color: '#6d28d9', margin: 0 }}>
-                              Suggested Road: <strong>{suggestedRoute.name || 'Local Street'}</strong> ({suggestedRoute.type})
-                            </p>
-                            <p style={{ fontSize: '0.78rem', color: '#7c3aed', margin: '4px 0 0', display: 'flex', alignItems: 'center', gap: '6px' }}>
-                              <span>Density: <strong style={{ color: suggestedRoute.density_color }}>{suggestedRoute.density} Density</strong></span>
-                              <span>•</span>
-                              <span>Confidence: <strong>{suggestedRoute.confidence}%</strong></span>
-                              {trafficFactors && (
-                                <>
-                                  <span>•</span>
-                                  <span>Factors: <strong>Hour {trafficFactors.hour} {trafficFactors.is_rush_hour ? '(Rush Hour)' : '(Off-Peak)'}</strong></span>
-                                </>
-                              )}
-                            </p>
-                            <p style={{ fontSize: '0.76rem', color: 'var(--text-muted)', margin: '4px 0 0' }}>
-                              Est. Distance: <strong>{Math.round(distanceVal * 100) / 100} km</strong> &nbsp;·&nbsp; Est. Duration: <strong>{Math.ceil(distanceVal * (suggestedRoute.density === 'High' ? 4 : suggestedRoute.density === 'Medium' ? 2.8 : 1.8))} mins</strong>
-                            </p>
-                          </div>
-                        ) : (
-                          <p style={{ fontSize: '0.78rem', color: '#6d28d9', margin: '6px 0 0' }}>
-                            Direct Distance: <strong>{Math.round(distanceVal * 100) / 100} km</strong> (Approx. travel duration: <strong>{Math.ceil(distanceVal * 2.5)} mins</strong>)
+                        <p style={{ margin: '4px 0', color: '#2563eb', fontWeight: 700, fontSize: '0.85rem' }}>
+                          {selectedRouteDoc.specialization || 'Specialist'}
+                        </p>
+                        <p style={{ margin: '4px 0', color: '#475569', fontSize: '0.82rem' }}>
+                          {selectedRouteDoc.hospital_name || 'Clinic'}
+                          {selectedRouteDoc.clinic_address ? ` · ${selectedRouteDoc.clinic_address}` : ''}
+                          {selectedRouteDoc.city ? `, ${selectedRouteDoc.city}` : ''}
+                        </p>
+                        <p style={{ margin: '6px 0', color: '#475569', fontSize: '0.8rem' }}>
+                          ⭐ {Number(selectedRouteDoc.rating_avg || 0).toFixed(1)} ({selectedRouteDoc.rating_count || 0} reviews)
+                          {' · '}{selectedRouteDoc.experience_years || 0} years experience
+                          {' · '}₹{selectedRouteDoc.consultation_fee ?? 'Fee not listed'}
+                        </p>
+                        {selectedRouteDoc.qualification && (
+                          <p style={{ margin: '4px 0', color: '#475569', fontSize: '0.8rem' }}>
+                            Qualification: {selectedRouteDoc.qualification}
+                          </p>
+                        )}
+                        {selectedRouteDoc.bio && (
+                          <p style={{ margin: '6px 0', color: '#475569', fontSize: '0.8rem' }}>
+                            {selectedRouteDoc.bio}
+                          </p>
+                        )}
+                        {selectedRouteDoc.home_visit_available && (
+                          <p style={{ margin: '4px 0', color: '#475569', fontSize: '0.8rem' }}>
+                            Home visits available · ₹{selectedRouteDoc.home_visit_fee || selectedRouteDoc.consultation_fee}
+                          </p>
+                        )}
+                        <p style={{ margin: '6px 0', color: selectedRouteDoc.is_available ? '#15803d' : '#b91c1c', fontSize: '0.8rem', fontWeight: 700 }}>
+                          {selectedRouteDoc.is_available ? 'Currently marked available' : 'Currently marked busy'}
+                          {selectedRouteDoc.available_days ? ` · ${selectedRouteDoc.available_days}` : ''}
+                        </p>
+                        {canCalculateRoute && (
+                          <p style={{ margin: '8px 0 0', color: '#334155', fontSize: '0.85rem' }}>
+                            {matchingRoute
+                              ? <>Driving distance: <strong>{matchingRoute.distanceKm.toFixed(1)} km</strong> · Estimated drive: <strong>{matchingRoute.durationMinutes} min</strong></>
+                              : <>Straight-line distance: <strong>{directDistance.toFixed(1)} km</strong></>}
+                          </p>
+                        )}
+                        {!hasCoordinates(selectedRouteDoc.latitude, selectedRouteDoc.longitude) && (
+                          <p style={{ margin: '8px 0 0', color: '#b45309', fontSize: '0.82rem' }}>
+                            This doctor has not added clinic coordinates, so a route cannot be calculated.
+                          </p>
+                        )}
+                        {!hasCoordinates(coords.lat, coords.lng) && hasCoordinates(selectedRouteDoc.latitude, selectedRouteDoc.longitude) && (
+                          <p style={{ margin: '8px 0 0', color: '#64748b', fontSize: '0.82rem' }}>
+                            Enable your location to calculate distance and driving time.
+                          </p>
+                        )}
+                        {routeLoading && (
+                          <p role="status" style={{ margin: '8px 0 0', color: '#4f46e5', fontSize: '0.82rem' }}>
+                            Calculating driving route…
+                          </p>
+                        )}
+                        {routeError && (
+                          <p role="alert" style={{ margin: '8px 0 0', color: '#b91c1c', fontSize: '0.82rem' }}>
+                            {routeError} You can still open directions in Google Maps.
                           </p>
                         )}
                       </div>
-                      
-                      <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
-                        <button 
-                          onClick={() => handleBookNowDirect(selectedRouteDoc._id)} 
+                      <div style={{ display: 'flex', flexWrap: 'wrap', gap: '8px' }}>
+                        {directionsUrl && (
+                          <a
+                            href={directionsUrl}
+                            target="_blank"
+                            rel="noreferrer"
+                            className="btn btn-outline btn-sm"
+                            style={{ borderRadius: '10px', padding: '8px 12px', fontSize: '0.8rem' }}
+                          >
+                            Open directions
+                          </a>
+                        )}
+                        <button
+                          onClick={() => handleBookNowDirect(selectedRouteDoc._id)}
                           className="btn btn-primary btn-sm"
-                          style={{ borderRadius: '10px', padding: '8px 16px', fontSize: '0.8rem', backgroundColor: '#6d28d9', border: 'none', fontWeight: 600 }}
+                          style={{ borderRadius: '10px', padding: '8px 14px', fontSize: '0.8rem', fontWeight: 600 }}
                         >
-                          Book Appointment
+                          Book appointment
                         </button>
                       </div>
                     </div>
-
-                    {/* Traffic Legend */}
-                    {trafficRoutes.length > 0 && (
-                      <div style={{ display: 'flex', gap: '12px', flexWrap: 'wrap', fontSize: '0.72rem', color: 'var(--text-muted)', paddingLeft: '8px' }}>
-                        <span style={{ display: 'flex', alignItems: 'center', gap: '4px' }}>
-                          <span style={{ width: '12px', height: '4px', background: '#22c55e', borderRadius: '2px' }}></span> Low Density
-                        </span>
-                        <span style={{ display: 'flex', alignItems: 'center', gap: '4px' }}>
-                          <span style={{ width: '12px', height: '4px', background: '#f59e0b', borderRadius: '2px' }}></span> Medium Density
-                        </span>
-                        <span style={{ display: 'flex', alignItems: 'center', gap: '4px' }}>
-                          <span style={{ width: '12px', height: '4px', background: '#ef4444', borderRadius: '2px' }}></span> High Density
-                        </span>
-                        <span style={{ display: 'flex', alignItems: 'center', gap: '4px', fontStyle: 'italic', marginLeft: 'auto' }}>
-                          *Hover on any path segment to view street details & confidence index.
-                        </span>
-                      </div>
-                    )}
-
+                    <p style={{ margin: '12px 0 0', color: '#64748b', fontSize: '0.72rem' }}>
+                      Driving distance and duration are route estimates, not live traffic predictions. Straight-line distance is shown until a route is available.
+                    </p>
                   </div>
                 );
               }
@@ -832,7 +971,7 @@ const Doctors = () => {
 
                         {/* Right: Info */}
                         <div style={{ flex: 1 }}>
-                          <h4 style={{ fontSize: '1.05rem', fontWeight: 800, margin: '0 0 2px', color: '#0f172a', textAlign: 'left' }}>Dr. {doc.full_name}</h4>
+                          <h4 style={{ fontSize: '1.05rem', fontWeight: 800, margin: '0 0 2px', color: '#0f172a', textAlign: 'left' }}>Dr. {getDoctorDisplayName(doc.full_name)}</h4>
                           <span style={{ fontSize: '0.78rem', color: '#2563eb', fontWeight: 700, display: 'block', marginBottom: '6px', textAlign: 'left' }}>
                             {doc.specialization}
                           </span>
@@ -856,10 +995,19 @@ const Doctors = () => {
                         <span>₹{doc.consultation_fee}</span>
                       </div>
 
-                      {doc.latitude && doc.longitude && (
+                      {role === 'patient' && (
+                        <FavoriteDoctorSwitch
+                          doctorId={doc._id}
+                          checked={favoriteDoctorIds.has(doc._id)}
+                          disabled={favoriteUpdates.has(doc._id)}
+                          onChange={(isFavorite) => handleFavoriteChange(doc._id, isFavorite)}
+                        />
+                      )}
+
+                      {hasCoordinates(doc.latitude, doc.longitude) && (
                         <div style={{ marginTop: '8px', display: 'flex', alignItems: 'center', gap: '6px', fontSize: '0.8rem', color: '#6d28d9', background: '#f5f3ff', padding: '6px 10px', borderRadius: '8px', border: '1px solid #ddd6fe' }}>
-                          <span>📍 Distance: <strong>{coords.lat && coords.lng ? `${Math.round(getDistance(coords.lat, coords.lng, doc.latitude, doc.longitude) * 100) / 100} km` : 'Active on map'}</strong></span>
-                          {coords.lat && coords.lng && (
+                          <span>📍 Distance: <strong>{hasCoordinates(coords.lat, coords.lng) ? `${Math.round(getDistance(coords.lat, coords.lng, doc.latitude, doc.longitude) * 100) / 100} km` : 'Active on map'}</strong></span>
+                          {hasCoordinates(coords.lat, coords.lng) && (
                             <button 
                               type="button" 
                               onClick={() => {
@@ -924,7 +1072,7 @@ const Doctors = () => {
                     style={{ width: '90px', height: '90px', borderRadius: '50%', objectFit: 'cover', border: '3px solid var(--primary)' }}
                   />
                   <div style={{ flex: 1, minWidth: '200px' }}>
-                    <h3 style={{ fontSize: '1.35rem', fontWeight: 800, margin: 0 }}>Dr. {selectedDoc.full_name}</h3>
+                    <h3 style={{ fontSize: '1.35rem', fontWeight: 800, margin: 0 }}>Dr. {getDoctorDisplayName(selectedDoc.full_name)}</h3>
                     <p style={{ fontSize: '0.9rem', color: 'var(--primary)', fontWeight: 700, margin: '2px 0 6px' }}>{selectedDoc.specialization}</p>
                     <div style={{ display: 'flex', gap: '12px', fontSize: '0.8rem', color: 'var(--text-muted)' }}>
                       <span>🎓 {selectedDoc.qualification || 'MBBS'}</span>
@@ -935,6 +1083,14 @@ const Doctors = () => {
                     </div>
                   </div>
                 </div>
+                {role === 'patient' && (
+                  <FavoriteDoctorSwitch
+                    doctorId={selectedDoc._id}
+                    checked={favoriteDoctorIds.has(selectedDoc._id)}
+                    disabled={favoriteUpdates.has(selectedDoc._id)}
+                    onChange={(isFavorite) => handleFavoriteChange(selectedDoc._id, isFavorite)}
+                  />
+                )}
 
                 {/* Bio & Details */}
                 <div>
@@ -992,14 +1148,14 @@ const Doctors = () => {
               // Booking Form Screen
               <form onSubmit={handleBookingSubmit} style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
                 <h3 style={{ fontSize: '1.25rem', fontWeight: 800, margin: 0, display: 'flex', alignItems: 'center', gap: '8px' }}>
-                  📅 Book Consultation with Dr. {selectedDoc.full_name}
+                  📅 Book Consultation with Dr. {getDoctorDisplayName(selectedDoc.full_name)}
                 </h3>
                 <p style={{ margin: 0, color: 'var(--text-muted)', fontSize: '0.85rem' }}>
                   Your appointment is booked immediately; payment follows booking.
                 </p>
                 
                 {bookingMessage && (
-                  <div className={`alert ${bookingMessage.includes('successful') ? 'alert-success' : 'alert-danger'}`} style={{ padding: '10px 14px', fontSize: '0.85rem' }}>
+                  <div className={`alert ${bookingMessage.includes('successful') ? 'alert-success' : 'alert-danger'}`} role="alert" style={{ padding: '10px 14px', fontSize: '0.85rem' }}>
                     {bookingMessage}
                   </div>
                 )}
@@ -1011,9 +1167,14 @@ const Doctors = () => {
                       <input 
                         type="date" 
                         className="form-control form-control-sm"
-                        min={new Date().toISOString().split('T')[0]}
+                        min={getAppointmentDateTime().date}
                         value={bookingDate}
-                        onChange={(e) => setBookingDate(e.target.value)}
+                        onChange={(e) => {
+                          setBookingDate(e.target.value);
+                          setSelectedSlot('');
+                          setBookingMessage('');
+                          setSlotsMessage('');
+                        }}
                         required
                       />
                     </div>
@@ -1060,9 +1221,15 @@ const Doctors = () => {
                   <div className="col-12">
                     <div className="form-group">
                       <label className="form-label" style={{ fontSize: '0.8rem', fontWeight: 600 }}>Available Slots</label>
-                      {availableSlots.length === 0 ? (
+                      {slotsLoading ? (
+                        <p role="status" style={{ fontSize: '0.8rem', color: 'var(--text-muted)' }}>Checking available times…</p>
+                      ) : slotsError ? (
+                        <p role="alert" style={{ fontSize: '0.8rem', color: '#b91c1c', margin: 0, padding: '10px', background: '#fff5f5', borderRadius: '8px', border: '1px solid #fecaca' }}>
+                          {slotsError}
+                        </p>
+                      ) : availableSlots.length === 0 ? (
                         <p style={{ fontSize: '0.8rem', color: 'var(--text-muted)', margin: 0, padding: '10px', background: '#fff5f5', borderRadius: '8px', border: '1px solid #fecaca' }}>
-                          ⚠️ No slots available on this date. Please select another date.
+                          ⚠️ {slotsMessage || 'No future slots are available on this date. Please select another date.'}
                         </p>
                       ) : (
                         <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(80px, 1fr))', gap: '8px', maxHeight: '140px', overflowY: 'auto', padding: '4px' }}>

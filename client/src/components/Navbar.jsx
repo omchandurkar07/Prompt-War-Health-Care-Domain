@@ -93,6 +93,10 @@ const Navbar = () => {
   };
 
   const handleNotifClick = async (n) => {
+    const destination = n.link === '/appointments'
+      ? (role === 'doctor' ? '/doctor/appointments' : '/dashboard#appointments')
+      : n.link;
+
     try {
       if (!n.is_read) {
         await axios.post(`/api/notification/${n.id}/read`);
@@ -100,13 +104,13 @@ const Navbar = () => {
         setNotifications(prev => prev.map(item => item.id === n.id ? { ...item, is_read: 1 } : item));
       }
       handleCloseNotifMenu();
-      if (n.link) {
-        navigate(n.link);
+      if (destination) {
+        navigate(destination);
       }
     } catch (err) {
       console.error('Failed to read notification', err);
       handleCloseNotifMenu();
-      if (n.link) navigate(n.link);
+      if (destination) navigate(destination);
     }
   };
 
@@ -609,8 +613,8 @@ const Navbar = () => {
                           </Button>
                         </Box>
                         {notifications.map((n) => (
-                          <MenuItem key={n.id} sx={{ py: 1.5, px: 2, borderBottom: '1px solid rgba(0,0,0,0.04)', display: 'flex', justifyContent: 'space-between', alignItems: 'center', '&:hover': { backgroundColor: 'rgba(0, 0, 0, 0.02)' } }}>
-                            <Box onClick={() => handleNotifClick(n)} sx={{ flexGrow: 1, cursor: 'pointer', mr: 1 }}>
+                          <MenuItem key={n.id} onClick={() => handleNotifClick(n)} sx={{ py: 1.5, px: 2, borderBottom: '1px solid rgba(0,0,0,0.04)', display: 'flex', justifyContent: 'space-between', alignItems: 'center', '&:hover': { backgroundColor: 'rgba(0, 0, 0, 0.02)' } }}>
+                            <Box sx={{ flexGrow: 1, mr: 1 }}>
                               <Typography variant="body2" sx={{ fontWeight: n.is_read ? 400 : 600 }}>{n.title}</Typography>
                             </Box>
                             <IconButton 

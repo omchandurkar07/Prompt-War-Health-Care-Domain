@@ -29,6 +29,8 @@ const AppointmentSchema = new mongoose.Schema({
     requested_at: { type: Date }
   },
   appointment_reminder_sent_at: { type: Date },
+  consultation_reminder_claimed_at: { type: Date },
+  consultation_reminder_sent_at: { type: Date },
   doctor_reschedule_message: { type: String, default: '' }
 });
 

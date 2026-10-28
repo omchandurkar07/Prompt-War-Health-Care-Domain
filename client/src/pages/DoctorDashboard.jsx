@@ -129,21 +129,23 @@ const DoctorDashboard = () => {
         </div>
 
         {/* Availability Toggle Switch */}
-        <div style={{ display: 'flex', alignItems: 'center', gap: '12px', background: 'rgba(255, 255, 255, 0.08)', backdropFilter: 'blur(10px)', padding: '12px 20px', borderRadius: '14px', border: '1px solid rgba(255, 255, 255, 0.15)' }}>
-          <div style={{ textAlign: 'right' }}>
-            <span style={{ fontSize: '0.85rem', fontWeight: 700, display: 'block', color: 'white' }}>Availability Status</span>
-            <span style={{ fontSize: '0.75rem', color: doctor?.is_available ? '#34d399' : '#f87171', fontWeight: 600 }}>
-              {doctor?.is_available ? '🟢 Accepting Emergencies' : '🔴 Status Set to Busy'}
+        <div className="doctor-availability-panel">
+          <div className="doctor-availability-copy">
+            <span className="doctor-availability-title">Availability Status</span>
+            <span className={`doctor-availability-state ${doctor?.is_available ? 'is-available' : 'is-busy'}`}>
+              <span className="doctor-availability-indicator" aria-hidden="true" />
+              {doctor?.is_available ? 'Accepting Emergencies' : 'Status Set to Busy'}
             </span>
           </div>
           <button 
             type="button" 
             onClick={handleToggleAvailability}
-            className={`btn btn-sm ${doctor?.is_available ? 'btn-danger' : 'btn-success'}`}
-            style={{ borderRadius: '8px', padding: '6px 12px' }}
+            className="btn-shine"
             disabled={statusUpdating}
+            aria-busy={statusUpdating}
+            aria-label={doctor?.is_available ? 'Set availability to busy' : 'Set availability to active'}
           >
-            {doctor?.is_available ? 'Set Busy' : 'Set Active'}
+            <span>{statusUpdating ? 'Updating...' : doctor?.is_available ? 'Set Busy' : 'Set Active'}</span>
           </button>
         </div>
       </div>

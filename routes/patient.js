@@ -18,6 +18,25 @@ const Prescription = require('../models/Prescription');
 const { patientRequired } = require('../middleware/auth');
 const { sendAppointmentBookingEmail } = require('../services/emailService');
 
+const APPOINTMENT_TIME_ZONE = 'Asia/Kolkata';
+
+const getAppointmentDateTime = (date = new Date()) => {
+  const parts = new Intl.DateTimeFormat('en-CA', {
+    timeZone: APPOINTMENT_TIME_ZONE,
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+    hour: '2-digit',
+    minute: '2-digit',
+    hourCycle: 'h23'
+  }).formatToParts(date);
+  const values = Object.fromEntries(parts.map(({ type, value }) => [type, value]));
+  return {
+    date: `${values.year}-${values.month}-${values.day}`,
+    time: `${values.hour}:${values.minute}`
+  };
+};
+
 // Multer storage for patient profile uploads
 const storage = multer.diskStorage({
   destination: (req, file, cb) => {
@@ -315,6 +334,64 @@ router.get('/appointments', patientRequired, async (req, res) => {
 });
 
 // ==================== DOCTOR SEARCH & LISTING ====================
+router.get('/favorite-doctors', patientRequired, async (req, res) => {
+  try {
+    const patient = await Patient.findById(req.session.patient_id).select('favorite_doctors');
+    if (!patient) {
+      return res.status(404).json({ ok: false, error: 'Patient account not found.' });
+    }
+
+    res.json({
+      ok: true,
+      doctor_ids: patient.favorite_doctors.map(doctorId => doctorId.toString())
+    });
+  } catch (error) {
+    console.error('[FAVORITE-DOCTORS] Failed to load favorites:', error.message || error);
+    res.status(500).json({ ok: false, error: 'Unable to load favorite doctors.' });
+  }
+});
+
+router.put('/favorite-doctors/:did', patientRequired, async (req, res) => {
+  const { did } = req.params;
+  const { is_favorite: isFavorite } = req.body;
+
+  if (!/^[0-9a-fA-F]{24}$/.test(did)) {
+    return res.status(400).json({ ok: false, error: 'Invalid doctor ID.' });
+  }
+  if (typeof isFavorite !== 'boolean') {
+    return res.status(400).json({ ok: false, error: 'Favorite status must be true or false.' });
+  }
+
+  try {
+    if (isFavorite) {
+      const doctorExists = await Doctor.exists({ _id: did, is_approved: true });
+      if (!doctorExists) {
+        return res.status(404).json({ ok: false, error: 'Doctor not found.' });
+      }
+    }
+
+    const update = isFavorite
+      ? { $addToSet: { favorite_doctors: did } }
+      : { $pull: { favorite_doctors: did } };
+    const patient = await Patient.findByIdAndUpdate(
+      req.session.patient_id,
+      update,
+      { new: true, projection: 'favorite_doctors' }
+    );
+    if (!patient) {
+      return res.status(404).json({ ok: false, error: 'Patient account not found.' });
+    }
+
+    res.json({
+      ok: true,
+      is_favorite: patient.favorite_doctors.some(doctorId => doctorId.toString() === did)
+    });
+  } catch (error) {
+    console.error('[FAVORITE-DOCTORS] Failed to update favorite:', error.message || error);
+    res.status(500).json({ ok: false, error: 'Unable to update favorite doctor.' });
+  }
+});
+
 router.get('/doctors', async (req, res) => {
   const spec = req.query.spec || '';
   const q = req.query.q || '';
@@ -324,8 +401,8 @@ router.get('/doctors', async (req, res) => {
   const available_only = req.query.available === '1';
   const home_visit_only = req.query.home_visit === '1';
 
-  const user_lat = req.query.user_lat ? parseFloat(req.query.user_lat) : null;
-  const user_lng = req.query.user_lng ? parseFloat(req.query.user_lng) : null;
+  const user_lat = req.query.user_lat !== undefined ? parseFloat(req.query.user_lat) : null;
+  const user_lng = req.query.user_lng !== undefined ? parseFloat(req.query.user_lng) : null;
   const radius = req.query.radius ? parseFloat(req.query.radius) : 10;
 
   try {
@@ -358,24 +435,50 @@ router.get('/doctors', async (req, res) => {
       filter.home_visit_available = true;
     }
 
-    let doctors = await Doctor.find(filter).sort({ rating_avg: -1, rating_count: -1 });
+    const publicDoctorFields = [
+      '_id',
+      'full_name',
+      'specialization',
+      'qualification',
+      'experience_years',
+      'bio',
+      'profile_image',
+      'hospital_name',
+      'clinic_address',
+      'city',
+      'state',
+      'consultation_fee',
+      'home_visit_available',
+      'home_visit_fee',
+      'available_days',
+      'slot_start',
+      'slot_end',
+      'is_available',
+      'rating_avg',
+      'rating_count',
+      'response_time_avg',
+      'latitude',
+      'longitude'
+    ].join(' ');
+    let doctors = await Doctor.find(filter)
+      .select(publicDoctorFields)
+      .sort({ rating_avg: -1, rating_count: -1 });
 
     let has_location = false;
     let filtered_docs = [];
 
-    if (user_lat !== null && user_lng !== null && !isNaN(user_lat) && !isNaN(user_lng)) {
+    if (Number.isFinite(user_lat) && user_lat >= -90 && user_lat <= 90 &&
+        Number.isFinite(user_lng) && user_lng >= -180 && user_lng <= 180) {
       has_location = true;
       doctors.forEach(d => {
-        if (d.latitude !== undefined && d.longitude !== undefined && d.latitude !== null && d.longitude !== null) {
+        if (Number.isFinite(d.latitude) && d.latitude >= -90 && d.latitude <= 90 &&
+            Number.isFinite(d.longitude) && d.longitude >= -180 && d.longitude <= 180) {
           const dist = getDistance(user_lat, user_lng, d.latitude, d.longitude);
           if (dist <= radius) {
             const docObj = d.toObject();
             docObj.distance = Math.round(dist * 100) / 100;
             filtered_docs.push(docObj);
           }
-        } else {
-          // Keep doctor if coordinates missing but listed (default range matches)
-          filtered_docs.push(d.toObject());
         }
       });
       // Sort by distance
@@ -448,13 +551,39 @@ router.get('/doctor/:did', async (req, res) => {
       return res.status(404).json({ ok: false, error: 'Doctor not found.' });
     }
 
-    const doctor = await Doctor.findOne({ _id: did, is_approved: true });
+    const doctor = await Doctor.findOne({ _id: did, is_approved: true }).select([
+      '_id',
+      'full_name',
+      'specialization',
+      'qualification',
+      'experience_years',
+      'bio',
+      'profile_image',
+      'hospital_name',
+      'clinic_address',
+      'city',
+      'consultation_fee',
+      'home_visit_available',
+      'home_visit_fee',
+      'available_days',
+      'slot_start',
+      'slot_end',
+      'slot_duration',
+      'break_start',
+      'break_end',
+      'is_available',
+      'rating_avg',
+      'rating_count',
+      'response_time_avg',
+      'latitude',
+      'longitude'
+    ].join(' '));
     if (!doctor) {
       return res.status(404).json({ ok: false, error: 'Doctor not found.' });
     }
 
     const reviews = await Review.find({ doctor_id: did })
-      .populate('patient_id')
+      .populate('patient_id', 'full_name')
       .sort({ created_at: -1 })
       .limit(10);
 
@@ -530,13 +659,11 @@ router.post('/book/:did', patientRequired, async (req, res) => {
     }
 
     const appointmentDate = new Date(`${appt_date}T00:00:00.000Z`);
-    const now = new Date();
-    const today = new Date(now);
-    today.setUTCHours(0, 0, 0, 0);
+    const now = getAppointmentDateTime();
     if (Number.isNaN(appointmentDate.getTime()) ||
         appointmentDate.toISOString().slice(0, 10) !== appt_date ||
-        appointmentDate < today ||
-        (appt_date === now.toISOString().slice(0, 10) && time_slot <= now.toISOString().slice(11, 16))) {
+        appt_date < now.date ||
+        (appt_date === now.date && time_slot <= now.time)) {
       return res.status(400).json({ ok: false, error: 'Choose a future appointment date and time.' });
     }
 
@@ -595,13 +722,21 @@ router.post('/book/:did', patientRequired, async (req, res) => {
       message: `${pname} booked an appointment on ${appt_date} at ${time_slot}. Payment is ${homeFee > 0 ? 'pending' : 'not required'}.`,
       link: '/doctor/appointments'
     });
-    await newNotif.save();
+    try {
+      await newNotif.save();
+    } catch (notificationError) {
+      console.error('[APPOINTMENT] Booking saved, but doctor notification failed:', notificationError.message || notificationError);
+    }
 
     await checkAndAutoDisableDoctorAvailability(did, appt_date);
 
-    const patient = await Patient.findById(req.session.patient_id);
-    if (patient && patient.email) {
-      await sendAppointmentBookingEmail(patient.email, doctor.full_name, appt_date, time_slot, homeFee > 0);
+    try {
+      const patient = await Patient.findById(req.session.patient_id);
+      if (patient && patient.email) {
+        await sendAppointmentBookingEmail(patient.email, doctor.full_name, appt_date, time_slot, homeFee > 0);
+      }
+    } catch (emailError) {
+      console.error('[APPOINTMENT] Booking saved, but confirmation email failed:', emailError.message || emailError);
     }
 
     res.json({

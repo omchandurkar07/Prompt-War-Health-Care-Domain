@@ -1,10 +1,14 @@
 import React from 'react';
 import { Link } from 'react-router-dom';
-import { useAuth } from '../context/AuthContext';
+
+const socialLinks = [
+  { label: 'YouTube', href: 'https://www.youtube.com/', mark: '▶' },
+  { label: 'TikTok', href: 'https://www.tiktok.com/', mark: '♪' },
+  { label: 'Discord', href: 'https://discord.com/', mark: 'D' },
+  { label: 'Kick', href: 'https://kick.com/', mark: 'K' }
+];
 
 const Footer = () => {
-  const { role } = useAuth();
-
   return (
     <footer className="footer" style={{ marginTop: 'auto' }}>
       <div className="container">
@@ -32,6 +36,22 @@ const Footer = () => {
               <li><Link to="/register?type=doctor">Join as Doctor</Link></li>
               <li><Link to="/login?type=doctor">Doctor Login</Link></li>
             </ul>
+          </div>
+          <div className="footer-social">
+            <span className="footer-social-heading">Social</span>
+            {socialLinks.map(({ label, href, mark }) => (
+              <a
+                key={label}
+                className="footer-social-link"
+                href={href}
+                target="_blank"
+                rel="noopener noreferrer"
+                aria-label={`Open ${label}`}
+                title={label}
+              >
+                <span aria-hidden="true">{mark}</span>
+              </a>
+            ))}
           </div>
         </div>
       </div>

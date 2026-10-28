@@ -19,8 +19,11 @@ const ConsultationRoom = () => {
   const [messages, setMessages] = useState([]);
   const [typedMessage, setTypedMessage] = useState('');
   const [chatLoading, setChatLoading] = useState(false);
+  const [messageSent, setMessageSent] = useState(false);
+  const [chatError, setChatError] = useState('');
   const chatEndRef = useRef(null);
   const chatPollRef = useRef(null);
+  const messageSentTimerRef = useRef(null);
 
   // Video call UI simulation states
   const [cameraActive, setCameraActive] = useState(true);
@@ -63,6 +66,7 @@ const ConsultationRoom = () => {
     fetchRoomData();
     return () => {
       if (chatPollRef.current) clearInterval(chatPollRef.current);
+      if (messageSentTimerRef.current) clearTimeout(messageSentTimerRef.current);
     };
   }, [fetchRoomData]);
 
@@ -78,17 +82,26 @@ const ConsultationRoom = () => {
     if (!typedMessage.trim()) return;
 
     setChatLoading(true);
+    setChatError('');
     try {
       const res = await axios.post(`/api/api/chat/send/${aid}`, {
         message: typedMessage
       });
       if (res.data && res.data.ok) {
         setTypedMessage('');
+        setMessageSent(true);
+        if (messageSentTimerRef.current) clearTimeout(messageSentTimerRef.current);
+        messageSentTimerRef.current = setTimeout(() => {
+          setMessageSent(false);
+          messageSentTimerRef.current = null;
+        }, 2200);
         fetchChatHistory();
+      } else {
+        setChatError(res.data?.error || 'Message could not be sent. Please try again.');
       }
     } catch (err) {
       console.error(err);
-      alert('Failed to transmit message.');
+      setChatError(err.response?.data?.error || 'Failed to send message. Please try again.');
     } finally {
       setChatLoading(false);
     }
@@ -199,7 +212,7 @@ const ConsultationRoom = () => {
             </div>
 
             {/* Chat input box */}
-            <form onSubmit={handleSendMessage} style={{ display: 'flex', gap: '8px' }}>
+            <form onSubmit={handleSendMessage} style={{ display: 'flex', gap: '8px', alignItems: 'center' }}>
               <input 
                 type="text" 
                 placeholder="Type your medical query..."
@@ -210,8 +223,43 @@ const ConsultationRoom = () => {
                 disabled={chatLoading}
                 required
               />
-              <button type="submit" disabled={chatLoading || !typedMessage.trim()} className="btn btn-primary btn-sm">Send</button>
+              <button
+                type="submit"
+                disabled={chatLoading || !typedMessage.trim()}
+                className={`consultation-send-button${messageSent ? ' is-sent' : ''}`}
+                aria-busy={chatLoading}
+                aria-live="polite"
+              >
+                <span className="consultation-send-outline" aria-hidden="true" />
+                <span className="consultation-send-state consultation-send-default">
+                  <span className="consultation-send-icon" aria-hidden="true">
+                    <svg viewBox="0 0 24 24" fill="none">
+                      <path d="M21.5 2.5 14 21.5l-4.2-8.3L1.5 9l20-6.5Z" />
+                      <path d="M21.5 2.5 9.8 13.2" />
+                    </svg>
+                  </span>
+                  <span className="consultation-send-label" aria-label={chatLoading ? 'Sending' : 'Send message'}>
+                    {(chatLoading ? 'Sending' : 'Send Message').split('').map((letter, index) => (
+                      <span key={`${letter}-${index}`} style={{ '--letter-index': index }}>{letter === ' ' ? '\u00a0' : letter}</span>
+                    ))}
+                  </span>
+                </span>
+                <span className="consultation-send-state consultation-send-success">
+                  <span className="consultation-send-success-icon" aria-hidden="true">
+                    <svg viewBox="0 0 24 24" fill="none">
+                      <circle cx="12" cy="12" r="10" />
+                      <path d="m7.5 12 3 3 6-6" />
+                    </svg>
+                  </span>
+                  <span className="consultation-send-label" aria-label="Sent">
+                    {'Sent'.split('').map((letter, index) => (
+                      <span key={`${letter}-${index}`} style={{ '--letter-index': index + 5 }}>{letter}</span>
+                    ))}
+                  </span>
+                </span>
+              </button>
             </form>
+            {chatError && <p role="alert" style={{ color: '#b91c1c', fontSize: '0.75rem', margin: '6px 0 0' }}>{chatError}</p>}
 
           </div>
         </div>

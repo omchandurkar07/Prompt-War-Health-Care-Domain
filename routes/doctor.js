@@ -413,7 +413,7 @@ router.post('/doctor/appointment/:aid/accept', doctorRequired, async (req, res) 
         user_type: 'patient',
         title: '✔ Appointment Confirmed',
         message: `Your appointment on ${appt.appt_date} at ${appt.time_slot} has been confirmed!`,
-        link: '/appointments'
+        link: '/dashboard#appointments'
       });
       await newNotif.save();
     }
@@ -446,7 +446,7 @@ router.post('/doctor/appointment/:aid/reject', doctorRequired, async (req, res) 
         user_type: 'patient',
         title: '✖ Appointment Declined',
         message: `Your appointment on ${appt.appt_date} at ${appt.time_slot} was declined.`,
-        link: '/appointments'
+        link: '/dashboard#appointments'
       });
       await newNotif.save();
     }
@@ -507,6 +507,8 @@ router.post('/doctor/appointment/:aid/reschedule/:decision', doctorRequired, asy
       appointment.appt_date = request.appt_date;
       appointment.time_slot = request.time_slot;
       appointment.appointment_reminder_sent_at = undefined;
+      appointment.consultation_reminder_claimed_at = undefined;
+      appointment.consultation_reminder_sent_at = undefined;
     }
 
     appointment.reschedule_request = undefined;
@@ -582,6 +584,8 @@ router.post('/doctor/appointment/:aid/payment-reschedule', doctorRequired, async
     appointment.payment_status = 'pending';
     appointment.doctor_reschedule_message = message.trim();
     appointment.appointment_reminder_sent_at = undefined;
+    appointment.consultation_reminder_claimed_at = undefined;
+    appointment.consultation_reminder_sent_at = undefined;
     appointment.reschedule_request = undefined;
     appointment.updated_at = new Date();
     await appointment.save();
